@@ -1,0 +1,13 @@
+services:
+  kanban-api:
+    build:
+      context: ./chdeal-kanban-api
+      dockerfile: Dockerfile
+    container_name: kanban-api
+    ports:
+      - "3001:3001"
+    volumes:
+      - kanban-data:/app/data   # Persists the SQLite database
+    env_file:
+      - ./chdeal-kanban-api/.env
+    restart: unless-stopped
