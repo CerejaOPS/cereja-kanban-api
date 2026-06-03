@@ -1,11 +1,54 @@
+/**
+ * routes/tasks.js — CherDeal Kanban API - Roteador Principal
+ * ===========================================================
+ * Define todas as rotas da API REST do Kanban.
+ *
+ * ARQUITETURA:
+ *  - Funções auxiliares (formatTask, addTimeEntry, broadcastBoardUpdate, etc.)
+ *    foram centralizadas em `controllers/helpers.js` para facilitar reuso.
+ *  - Este arquivo contém apenas as declarações de rotas, organizadas por seções.
+ *
+ * SEÇÕES DE ROTAS:
+ *  1. SSE          — Conexão em tempo real (Server-Sent Events)
+ *  2. FASES        — Gerenciamento de colunas/fases do board
+ *  3. LABELS       — Sistema de etiquetas coloridas
+ *  4. MEMBERS      — Lista de membros da equipe
+ *  5. TASKS        — CRUD principal de tasks
+ *  6. PHASE MOVE   — Movimentação de tasks entre fases
+ *  7. ASSIGN       — Atribuição de responsável
+ *  8. EDIÇÃO       — Edição de campos (título, descrição, vencimento, etc.)
+ *  9. COMMENTS     — Comentários e timeline
+ * 10. TIME         — Registro de tempo gasto
+ * 11. OBSERVATIONS — Notas/observações estratégicas
+ * 12. OWNERSHIP    — Controle de "dono ativo" (quem está trabalhando agora)
+ * 13. CHECKLISTS   — Etapas de execução (subtarefas)
+ * 14. ACTIVITY     — Histórico de atividades por fase
+ */
 import { Router } from 'express';
 import { db } from '../database.js';
 import { requireAuthOrApiKey } from '../middleware/auth.js';
+import {
+  sseClients,
+  broadcastBoardUpdate,
+  triggerWebhook,
+  triggerCriticalReviewWebhook,
+  isAdminRequest,
+  actorFromRequest,
+  getTaskOrNull,
+  addTaskActivity,
+  addTimeEntry,
+  getTimeSummary,
+  formatTask
+} from '../controllers/helpers.js';
+
+export { broadcastBoardUpdate };
 
 const router = Router();
 
-// Store active SSE clients
-const sseClients = new Set();
+// ==========================================
+// 1. SSE — Server-Sent Events
+// ==========================================
+/** Armazena conexões SSE ativas — gerenciado em controllers/helpers.js */
 
 /**
  * GET /api/events
@@ -26,159 +69,15 @@ router.get('/api/events', (req, res) => {
   });
 });
 
-/**
- * Helper: Broadcasts SSE event.
- */
-export function broadcastBoardUpdate(taskId, action) {
-  const payload = JSON.stringify({ type: 'board_update', taskId: String(taskId), action });
-  console.log(`📡 SSE Broadcast: board_update (Task: ${taskId}, Action: ${action}) to ${sseClients.size} clients.`);
-  for (const client of sseClients) {
-    client.write(`data: ${payload}\n\n`);
-  }
-}
 
-function isAdminRequest(req) {
-  return Boolean(req.isBot || (req.user && req.user.role === 'admin'));
-}
-
-function actorFromRequest(req, body = {}) {
-  return {
-    name: body.actor_name || (req.user && req.user.name) || 'System',
-    discordId: body.actor_discord_id || (req.user && req.user.id) || null
-  };
-}
-
-function getTaskOrNull(taskId) {
-  return db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
-}
-
-function addTaskActivity(taskId, action, phase, fromValue, toValue, actorName, actorDiscordId) {
-  db.prepare(`
-    INSERT INTO activity_log (task_id, action, phase, from_phase, to_phase, actor_name, actor_discord_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(taskId, action, phase || null, fromValue || null, toValue || null, actorName, actorDiscordId || null);
-}
-
-function addTimeEntry({ taskId, phase, minutes, note = '', source = 'manual', actorName, actorDiscordId }) {
-  const parsedMinutes = Math.max(0, parseFloat(minutes) || 0);
-  if (parsedMinutes <= 0) return null;
-
-  const info = db.prepare(`
-    INSERT INTO task_time_entries (task_id, phase, minutes, note, source, actor_name, actor_discord_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(taskId, phase || null, parsedMinutes, note || '', source, actorName, actorDiscordId || null);
-
-  db.prepare(`
-    UPDATE tasks
-    SET time_spent = COALESCE(time_spent, 0) + ?,
-        last_edited_by_name = ?,
-        last_edited_by_discord_id = ?,
-        updated_at = datetime('now')
-    WHERE id = ?
-  `).run(parsedMinutes, actorName, actorDiscordId || null, taskId);
-
-  addTaskActivity(taskId, 'time_logged', phase, source, `${parsedMinutes}|${note || ''}`, actorName, actorDiscordId);
-  return db.prepare('SELECT * FROM task_time_entries WHERE id = ?').get(info.lastInsertRowid);
-}
-
-function getTimeSummary(taskId) {
-  const entries = db.prepare(`
-    SELECT *
-    FROM task_time_entries
-    WHERE task_id = ?
-    ORDER BY created_at DESC, id DESC
-  `).all(taskId);
-
-  const byPhase = db.prepare(`
-    SELECT phase, SUM(minutes) as minutes
-    FROM task_time_entries
-    WHERE task_id = ?
-    GROUP BY phase
-  `).all(taskId);
-
-  const byUser = db.prepare(`
-    SELECT actor_name, actor_discord_id, SUM(minutes) as minutes
-    FROM task_time_entries
-    WHERE task_id = ?
-    GROUP BY actor_name, actor_discord_id
-    ORDER BY minutes DESC
-  `).all(taskId);
-
-  return { entries, byPhase, byUser };
-}
-
-/**
- * Helper: Formats a task row and attaches associated tags/labels and checklists.
- */
-function formatTask(task) {
-  if (!task) return null;
-
-  // Retrieve custom phase name from database or fallback
-  const phaseRow = db.prepare('SELECT name FROM phases WHERE id = ?').get(task.phase);
-  const phaseName = phaseRow ? phaseRow.name : task.phase;
-
-  // Fetch labels/tags linked to this task
-  const taskLabels = db.prepare(`
-    SELECT l.id, l.name, l.color 
-    FROM labels l 
-    JOIN task_labels tl ON l.id = tl.label_id 
-    WHERE tl.task_id = ?
-  `).all(task.id);
-
-  // Fetch checklists linked to this task
-  const checklists = db.prepare(`
-    SELECT * FROM task_checklists 
-    WHERE task_id = ? 
-    ORDER BY position ASC, id ASC
-  `).all(task.id);
-
-  const checklistsWithDetails = checklists.map(cl => {
-    const comments = db.prepare('SELECT * FROM checklist_comments WHERE checklist_id = ? ORDER BY created_at ASC').all(cl.id);
-    const activity = db.prepare('SELECT * FROM checklist_activity WHERE checklist_id = ? ORDER BY created_at ASC').all(cl.id);
-    return {
-      ...cl,
-      comments,
-      activity
-    };
-  });
-
-  const activeOwner = task.active_owner_discord_id ? {
-    id: task.active_owner_discord_id,
-    name: task.active_owner_name,
-    avatarUrl: task.active_owner_avatar_url,
-    startedAt: task.active_owner_started_at
-  } : null;
-
-  return {
-    ...task,
-    id: String(task.id),
-    createdAt: task.created_at,
-    updatedAt: task.updated_at,
-    lastEditedByName: task.last_edited_by_name,
-    lastEditedByDiscordId: task.last_edited_by_discord_id,
-    timeSpent: task.time_spent || 0,
-    timeSummary: getTimeSummary(task.id),
-    dueDate: task.due_date || null,
-    activeOwner,
-    current_phase: {
-      id: task.phase,
-      name: phaseName
-    },
-    labels: taskLabels,
-    checklists: checklistsWithDetails,
-    assignees: task.assignee_name ? [{ 
-      name: task.assignee_name, 
-      email: task.assignee_email || '',
-      discord_id: task.assignee_discord_id 
-    }] : [],
-    fields: [
-      { name: 'descrição', value: task.description || '' }
-    ]
-  };
-}
+// ─── Helpers abaixo foram movidos para controllers/helpers.js ─────────────────
+// broadcastBoardUpdate, isAdminRequest, actorFromRequest, getTaskOrNull,
+// addTaskActivity, addTimeEntry, getTimeSummary, triggerWebhook,
+// triggerCriticalReviewWebhook e formatTask são agora importados no topo.
+// ─────────────────────────────────────────────────────────────────────────────
 
 // ==========================================
-// 🚀 ENDPOINTS DE FASES / COLUNAS
+// 2. FASES — Colunas/Fases do Board
 // ==========================================
 
 // List columns/phases sorted by position
@@ -268,8 +167,9 @@ router.delete('/api/phases/:id', requireAuthOrApiKey, (req, res) => {
 });
 
 
+
 // ==========================================
-// 🚀 ENDPOINTS DE LABELS / ETIQUETAS
+// 3. LABELS — Etiquetas Coloridas
 // ==========================================
 
 // List all reusable labels
@@ -415,6 +315,7 @@ router.post('/api/tasks', requireAuthOrApiKey, (req, res) => {
       VALUES (?, 'created', ?, ?, ?, ?)
     `).run(taskId, newTask.phase, newTask.phase, actor_name, actor_discord_id);
 
+    triggerWebhook('task_created', formatTask(newTask));
     broadcastBoardUpdate(taskId, 'created');
     return res.status(201).json(formatTask(newTask));
   } catch (error) {
@@ -495,6 +396,38 @@ router.patch('/api/tasks/:id/phase', requireAuthOrApiKey, (req, res) => {
       VALUES (?, 'moved', ?, ?, ?, ?, ?)
     `).run(taskId, phase, actualFromPhase, phase, actor_name, actor_discord_id);
 
+    // --- Webhook for Critical Review ---
+    if (phase === 'revisao' && actualFromPhase !== 'revisao') {
+      try {
+        const taskLabels = db.prepare(`
+          SELECT l.name FROM labels l
+          JOIN task_labels tl ON tl.label_id = l.id
+          WHERE tl.task_id = ?
+        `).all(taskId);
+
+        const isCritical = taskLabels.some(l =>
+          l.name.toLowerCase().includes('estratégica') ||
+          l.name.toLowerCase().includes('estrategica') ||
+          l.name.toLowerCase().includes('urgente') ||
+          l.name.toLowerCase().includes('bug') ||
+          l.name.toLowerCase().includes('crítica') ||
+          l.name.toLowerCase().includes('critica') ||
+          l.name.toLowerCase().includes('feature')
+        );
+
+        if (isCritical) {
+          triggerCriticalReviewWebhook({
+              taskId: taskId,
+              title: updatedTask.title,
+              actor_name: actor_name,
+              assignee_discord_id: updatedTask.assignee_discord_id,
+              labels: taskLabels
+            });
+        }
+      } catch(e) { console.error('Error in webhook logic (phase route):', e); }
+    }
+
+    triggerWebhook('task_phase_changed', formatTask(updatedTask));
     broadcastBoardUpdate(taskId, 'moved');
     return res.json(formatTask(updatedTask));
   } catch (error) {
@@ -534,6 +467,7 @@ router.patch('/api/tasks/:id/assign', requireAuthOrApiKey, (req, res) => {
       VALUES (?, 'assigned', ?, ?, ?, ?)
     `).run(taskId, task.phase, assignee_name, finalActorName, finalActorDiscordId);
 
+    triggerWebhook('task_assigned', formatTask(updatedTask));
     broadcastBoardUpdate(taskId, 'assigned');
     return res.json(formatTask(updatedTask));
   } catch (error) {
@@ -569,9 +503,28 @@ router.delete('/api/tasks/:id/assign', requireAuthOrApiKey, (req, res) => {
       VALUES (?, 'unassigned', ?, ?, ?, ?)
     `).run(taskId, task.phase, oldAssigneeName, actor_name, actor_discord_id);
 
+    triggerWebhook('task_unassigned', formatTask(updatedTask));
     broadcastBoardUpdate(taskId, 'unassigned');
     return res.json(formatTask(updatedTask));
   } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+// 6b. PATCH /api/tasks/:id/thread
+router.patch('/api/tasks/:id/thread', requireAuthOrApiKey, (req, res) => {
+  try {
+    const taskId = req.params.id;
+    const { discord_thread_id } = req.body;
+    
+    const task = db.prepare('SELECT id FROM tasks WHERE id = ?').get(taskId);
+    if (!task) return res.status(404).json({ error: 'Task not found.' });
+
+    db.prepare('UPDATE tasks SET discord_thread_id = ? WHERE id = ?').run(discord_thread_id, taskId);
+    
+    return res.json({ success: true, discord_thread_id });
+  } catch (error) {
+    logger.error('Error updating thread ID:', error);
     return res.status(500).json({ error: error.message });
   }
 });
@@ -720,6 +673,36 @@ router.patch('/api/tasks/:id', requireAuthOrApiKey, (req, res) => {
         const query = `UPDATE tasks SET ${updateFields.join(', ')} WHERE id = ?`;
         params.push(taskId);
         db.prepare(query).run(...params);
+      }
+
+      // --- Webhook for Critical Review ---
+      if (phase === 'revisao' && task.phase !== 'revisao') {
+        try {
+          const taskLabels = db.prepare(`
+            SELECT l.name FROM labels l
+            JOIN task_labels tl ON tl.label_id = l.id
+            WHERE tl.task_id = ?
+          `).all(taskId);
+          
+          const isCritical = taskLabels.some(l => 
+            l.name.toLowerCase().includes('estratégica') || 
+            l.name.toLowerCase().includes('estrategica') || 
+            l.name.toLowerCase().includes('urgente') || 
+            l.name.toLowerCase().includes('bug') || 
+            l.name.toLowerCase().includes('crítica') ||
+            l.name.toLowerCase().includes('critica')
+          );
+
+          if (isCritical) {
+            triggerCriticalReviewWebhook({
+                taskId: taskId,
+                title: title || task.title,
+                actor_name: actor_name,
+                assignee_discord_id: assignee_discord_id || task.assignee_discord_id,
+                labels: taskLabels
+              });
+          }
+        } catch(e) { console.error('Error in webhook logic:', e); }
       }
 
       // Record activity logs

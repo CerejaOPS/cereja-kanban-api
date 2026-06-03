@@ -63,6 +63,7 @@ export function initDatabase() {
       last_edited_by_discord_id TEXT DEFAULT NULL,
       time_spent REAL DEFAULT 0,
       due_date TEXT DEFAULT NULL,
+      discord_thread_id TEXT DEFAULT NULL,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     );
@@ -195,6 +196,7 @@ export function initDatabase() {
   ensureColumn('tasks', 'active_owner_name', 'TEXT DEFAULT NULL');
   ensureColumn('tasks', 'active_owner_avatar_url', 'TEXT DEFAULT NULL');
   ensureColumn('tasks', 'active_owner_started_at', 'TEXT DEFAULT NULL');
+  ensureColumn('tasks', 'discord_thread_id', 'TEXT DEFAULT NULL');
   ensureDefaultPhases();
 
   db.prepare('CREATE INDEX IF NOT EXISTS idx_task_time_entries_task ON task_time_entries(task_id, created_at)').run();

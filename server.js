@@ -7,6 +7,7 @@ import 'dotenv/config';
 import { initDatabase } from './database.js';
 import authRouter from './routes/auth.js';
 import tasksRouter from './routes/tasks.js';
+import statsRouter from './routes/stats.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,6 +25,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Routers
 app.use('/', authRouter);
 app.use('/', tasksRouter);
+app.use('/', statsRouter);
 
 // Health check endpoint
 app.get('/health', (req, res) => {

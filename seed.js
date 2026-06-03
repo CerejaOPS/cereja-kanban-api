@@ -13,6 +13,13 @@ async function seed() {
   db.prepare('DELETE FROM labels').run();
   db.prepare('DELETE FROM task_labels').run();
   db.prepare('DELETE FROM discord_users').run();
+  
+  // Reset autoincrement ID counters
+  try {
+    db.prepare('DELETE FROM sqlite_sequence').run();
+  } catch(e) {
+    // sqlite_sequence might not exist if no autoincrement tables were touched yet
+  }
 
   console.log('Fallback admin user creation skipped.');
   console.log('Users will be created dynamically upon login or via sync.');
