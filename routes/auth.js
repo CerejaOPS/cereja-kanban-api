@@ -224,7 +224,8 @@ router.get('/auth/me', authenticateJWT, (req, res) => {
         email: req.user.email,
         role: req.user.role,
         avatarUrl: req.user.avatarUrl
-      }
+      },
+      guildId: process.env.GUILD_ID || null
     });
   }
 
@@ -239,7 +240,8 @@ router.get('/auth/me', authenticateJWT, (req, res) => {
       ...user,
       id: String(user.id),
       avatarUrl: `https://ui-avatars.com/api/?name=${encodeURIComponent(user.name)}&background=6c63ff&color=fff`
-    }
+    },
+    guildId: process.env.GUILD_ID || null
   });
 });
 

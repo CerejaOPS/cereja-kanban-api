@@ -1374,3 +1374,250 @@
       border-radius: 3px;
       transition: width 0.6s ease;
     }
+
+    /* ========== HUB VIEW ========== */
+    .hub-container {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .hub-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 32px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .hub-header h2 {
+      font-size: 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 700;
+      background: linear-gradient(90deg, #fff, #a5b4fc);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .hub-header h2 i {
+      -webkit-text-fill-color: #6366f1; /* Reset icon color */
+    }
+    .btn-new-kanban {
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      color: #fff;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.3s;
+      box-shadow: 0 4px 15px rgba(99, 102, 241, 0.3);
+    }
+    .btn-new-kanban:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(99, 102, 241, 0.5);
+    }
+    .boards-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 24px;
+      margin-top: 10px;
+    }
+    .board-card {
+      background: rgba(30, 30, 42, 0.6);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 20px;
+      padding: 24px;
+      cursor: pointer;
+      transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+      min-height: 140px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+    }
+    .board-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0; height: 4px;
+      background: var(--board-color, var(--accent));
+      opacity: 0.8;
+      transition: opacity 0.3s;
+    }
+    .board-card:hover {
+      transform: translateY(-6px);
+      border-color: rgba(255, 255, 255, 0.15);
+      box-shadow: 0 12px 30px -10px rgba(0, 0, 0, 0.6), 0 0 15px var(--board-color, rgba(99,102,241,0.3));
+    }
+    .board-card:hover::before {
+      opacity: 1;
+    }
+    .board-card-content {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .board-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.03);
+      color: var(--board-color, #fff);
+    }
+    .board-title {
+      font-size: 18px;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: 0.5px;
+    }
+    .board-meta {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    /* Drilldown Metrics & Clickable Cards */
+    .metric-card.clickable {
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .metric-card.clickable:hover {
+      transform: translateY(-2px);
+      border-color: var(--accent);
+      box-shadow: 0 4px 12px rgba(99, 102, 241, 0.2);
+    }
+    .metric-card.clickable::after {
+      content: '\f0da'; /* font-awesome caret right */
+      font-family: 'Font Awesome 6 Free';
+      font-weight: 900;
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      color: var(--text-muted);
+      opacity: 0;
+      transition: all 0.2s;
+    }
+    .metric-card.clickable:hover::after {
+      opacity: 1;
+      transform: translateX(4px);
+    }
+
+    .drilldown-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+    .drilldown-item {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border);
+      padding: 12px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .drilldown-item:hover {
+      background: rgba(255, 255, 255, 0.08);
+      border-color: var(--accent);
+    }
+    .drilldown-item-title {
+      font-weight: 600;
+      font-size: 14px;
+      margin-bottom: 4px;
+    }
+    .drilldown-item-meta {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    /* Board Card Actions container */
+    .board-card-actions {
+      position: absolute;
+      bottom: 24px;
+      right: 24px;
+      display: flex;
+      gap: 16px;
+      align-items: center;
+      opacity: 0;
+      transform: translateX(-10px);
+      transition: all 0.3s;
+      z-index: 10;
+    }
+    .board-card:hover .board-card-actions {
+      opacity: 1;
+      transform: translateX(0);
+    }
+    .board-card-action-icon {
+      color: var(--text-muted);
+      font-size: 20px;
+      transition: color 0.2s, transform 0.2s;
+    }
+    .board-card-action-icon:hover {
+      color: var(--board-color, var(--accent));
+      transform: scale(1.1);
+    }
+    
+    .board-icon {
+      font-size: 28px;
+      height: 48px;
+      width: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+    }
+    .board-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .board-meta {
+      font-size: 13px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn-back-hub {
+      margin-right: 16px;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 6px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      display: none; /* Only show in board view */
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+    }
+    .btn-back-hub:hover {
+      background: var(--bg-card);
+    }
+    .board-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      background: rgba(255,255,255,0.1);
+      border-left: 3px solid var(--board-color, var(--accent));
+    }

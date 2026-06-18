@@ -1,5 +1,5 @@
 /**
- * main.js — CherDeal Kanban Frontend
+ * main.js — Cereja Kanban Frontend
  * ====================================
  * Arquivo principal do painel web. Controla toda a lógica do Kanban:
  *
@@ -44,6 +44,7 @@
   // STATE
   // ============================================================
   let currentUser = null;
+  let currentGuildId = null;
   let allPhases = [];
   let allMembers = [];
   let allLabels = [];
@@ -199,6 +200,7 @@
       if (!res.ok) throw new Error('expired');
       const data = await res.json();
       currentUser = data.user;
+      currentGuildId = data.guildId;
       document.getElementById('user-name').textContent = currentUser.name || currentUser.username || 'Usuário';
       const avatar = currentUser.avatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(currentUser.name || 'U')}&background=6366f1&color=fff`;
       document.getElementById('user-avatar').src = avatar;
@@ -332,7 +334,17 @@
   async function renderBoard() {
     let tasks = [];
     try {
-      const res = await fetch('/api/tasks');
+      let url = '/api/tasks?';
+      const params = [];
+      if (window.currentBoardId && window.currentBoardId !== 'all') {
+         params.push('board_id=' + window.currentBoardId);
+      }
+      if (window.myTasksMode && currentUser) {
+         params.push('assignee_id=' + currentUser.id);
+      }
+      if (params.length > 0) url += params.join('&');
+      
+      const res = await fetch(url.endsWith('?') ? '/api/tasks' : url);
       tasks = res.ok ? await res.json() : [];
     } catch { return; }
 
@@ -401,31 +413,81 @@
     const addBtn = area.querySelector('.add-col-btn');
     area.innerHTML = '';
 
-    // Group tasks by phase
-    const byPhase = {};
-    allPhases.forEach(p => byPhase[p.id] = []);
-    tasks.forEach(t => {
-      const pid = t.phase || 'todo';
-      if (!byPhase[pid]) byPhase[pid] = [];
-      byPhase[pid].push(t);
-    });
+    if (window.myTasksMode) {
+      if (!tasks || tasks.length === 0) {
+        area.innerHTML = '<div style="display:flex; flex-direction:column; align-items:center; justify-content:center; width:100%; height:100%; color:rgba(255,255,255,0.3);"><i class="fa-solid fa-mug-hot" style="font-size:48px; margin-bottom:16px;"></i><p>Nenhuma tarefa atribuída a você no momento.</p></div>';
+        return;
+      }
+      // Group by board instead of phase
+      try {
+        const byBoard = {};
+        const boardsFound = [];
+        tasks.forEach(t => {
+          const bid = t.board ? t.board.id : 'unknown';
+          if (!byBoard[bid]) {
+            byBoard[bid] = [];
+            boardsFound.push(t.board || { id: 'unknown', name: 'Desconhecido', color: '#6C63FF', icon: '❓' });
+          }
+          byBoard[bid].push(t);
+        });
 
-    allPhases.forEach(phase => {
-      const col = buildColumn(phase, byPhase[phase.id] || []);
-      area.appendChild(col);
-    });
+        boardsFound.forEach(board => {
+          const col = buildBoardColumn(board, byBoard[board.id] || []);
+          area.appendChild(col);
+        });
+      } catch (err) {
+        console.error("Erro ao agrupar Minhas Tasks:", err);
+        area.innerHTML = '<div style="color:#ef4444; padding:20px;">Erro ao carregar Minhas Tasks.</div>';
+      }
+    } else {
+      // Group tasks by phase
+      const byPhase = {};
+      allPhases.forEach(p => byPhase[p.id] = []);
+      tasks.forEach(t => {
+        const pid = t.phase || 'todo';
+        if (!byPhase[pid]) byPhase[pid] = [];
+        byPhase[pid].push(t);
+      });
 
-    // Re-add the add column button
-    if (addBtn) area.appendChild(addBtn);
-    else {
-      const btn = document.createElement('button');
-      btn.className = 'add-col-btn';
-      btn.innerHTML = '<i class="fa-solid fa-plus"></i> Adicionar Fase';
-      btn.onclick = openAddColumnModal;
-      area.appendChild(btn);
+      allPhases.forEach(phase => {
+        const col = buildColumn(phase, byPhase[phase.id] || []);
+        area.appendChild(col);
+      });
+
+      // Re-add the add column button
+      if (addBtn) area.appendChild(addBtn);
+      else {
+        const btn = document.createElement('button');
+        btn.className = 'add-col-btn';
+        btn.innerHTML = '<i class="fa-solid fa-plus"></i> Adicionar Fase';
+        btn.onclick = openAddColumnModal;
+        area.appendChild(btn);
+      }
     }
 
     setupDragDrop();
+  }
+
+  function buildBoardColumn(board, tasks) {
+    const col = document.createElement('div');
+    col.className = 'board-col';
+    col.dataset.board = board.id;
+
+    col.innerHTML = `
+      <div class="col-header">
+        <div class="col-title-group">
+          <div class="col-dot" style="background:${board.color || '#6C63FF'}"></div>
+          <div class="col-name">${esc(board.name)}</div>
+          <div class="col-count">${tasks.length}</div>
+        </div>
+      </div>
+      <div class="cards-list"></div>
+    `;
+
+    const list = col.querySelector('.cards-list');
+    tasks.forEach(task => list.appendChild(buildCard(task, { id: task.phase, name: task.current_phase?.name || task.phase })));
+
+    return col;
   }
 
   function buildColumn(phase, tasks) {
@@ -538,6 +600,15 @@
       ? `https://ui-avatars.com/api/?name=${encodeURIComponent(assigneeName)}&background=6366f1&color=fff`
       : null;
 
+    let boardBadgeHtml = '';
+    if (window.myTasksMode) {
+      const pColor = phaseColor(task.phase);
+      const pName = task.current_phase?.name || task.phase;
+      boardBadgeHtml = `<div class="board-badge" style="--board-color: ${pColor}; font-weight: bold; font-size: 11px;">${esc(pName)}</div>`;
+    } else if (window.currentBoardId === 'all' && task.board) {
+      boardBadgeHtml = `<div class="board-badge" style="--board-color: ${task.board.color}">${task.board.icon} ${task.board.name}</div>`;
+    }
+
     card.innerHTML = `
       <div class="card-top">
         <span class="card-id">
@@ -545,6 +616,7 @@
           ${isUnread ? '<span style="display:inline-block; width:8px; height:8px; background:#ef4444; border-radius:50%; margin-left:4px; box-shadow: 0 0 8px #ef4444;"></span>' : ''}
         </span>
       </div>
+      ${boardBadgeHtml}
       <div class="card-title">${esc(task.title)}</div>
       ${labelsHtml}
       ${dueHtml}
@@ -564,14 +636,24 @@
       </div>
       <div class="card-footer">
         <span class="card-date">Atualizado: ${updatedStr}</span>
-        <div class="quick-btns">
-          <button class="quick-btn ${idx === 0 ? 'disabled' : ''}" onclick="event.stopPropagation(); moveStep('${task.id}', -1)" title="Mover para esquerda">
-            <i class="fa-solid fa-chevron-left"></i>
-          </button>
-          <button class="quick-btn ${idx >= phasesArr.length - 1 ? 'disabled' : ''}" onclick="event.stopPropagation(); moveStep('${task.id}', 1)" title="Mover para direita">
-            <i class="fa-solid fa-chevron-right"></i>
-          </button>
-        </div>
+        ${window.myTasksMode ? `
+          <select class="quick-phase-select" onclick="event.stopPropagation()" onchange="event.stopPropagation(); quickChangePhase('${task.id}', this.value)" style="
+            background:rgba(255,255,255,0.08); color:#e2e8f0; border:1px solid rgba(255,255,255,0.15);
+            border-radius:6px; padding:3px 8px; font-size:11px; cursor:pointer; outline:none;
+            max-width:130px; appearance:auto;
+          ">
+            ${allPhases.map(p => `<option value="${esc(p.id)}" ${p.id === task.phase ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
+          </select>
+        ` : `
+          <div class="quick-btns">
+            <button class="quick-btn ${idx === 0 ? 'disabled' : ''}" onclick="event.stopPropagation(); moveStep('${task.id}', -1)" title="Mover para esquerda">
+              <i class="fa-solid fa-chevron-left"></i>
+            </button>
+            <button class="quick-btn ${idx >= phasesArr.length - 1 ? 'disabled' : ''}" onclick="event.stopPropagation(); moveStep('${task.id}', 1)" title="Mover para direita">
+              <i class="fa-solid fa-chevron-right"></i>
+            </button>
+          </div>
+        `}
       </div>
     `;
 
@@ -587,6 +669,7 @@
   // DRAG & DROP
   // ============================================================
   function setupDragDrop() {
+    if (window.myTasksMode) return; // Disable D&D in My Tasks mode
     document.querySelectorAll('.card').forEach(card => {
       card.addEventListener('dragstart', e => {
         card.classList.add('dragging');
@@ -647,13 +730,25 @@
   async function submitDynamicForm() {
     if (!pendingDrop) return;
     
-    const inputs = document.querySelectorAll('.dyn-input');
     const dynamicFields = {};
-    for (const input of inputs) {
-      if (!input.value.trim()) { toast('Preencha os campos obrigatórios.', 'error'); return; }
-      const keyId = input.id.replace('dyn-', '');
-      const reqConfig = phaseRequirements[pendingDrop.newPhase].find(r => r.id === keyId);
-      dynamicFields[reqConfig ? reqConfig.label : keyId] = input.value.trim();
+    
+    if (pendingDrop.isGate) {
+      // Phase Gate mode — collect .dyn-gate-input fields
+      const inputs = document.querySelectorAll('.dyn-gate-input');
+      for (const input of inputs) {
+        if (!input.value.trim()) { toast('Preencha todos os campos obrigatórios.', 'error'); return; }
+        const fieldName = input.dataset.fieldName;
+        dynamicFields[fieldName] = input.value.trim();
+      }
+    } else {
+      // Legacy dynamic form mode
+      const inputs = document.querySelectorAll('.dyn-input');
+      for (const input of inputs) {
+        if (!input.value.trim()) { toast('Preencha os campos obrigatórios.', 'error'); return; }
+        const keyId = input.id.replace('dyn-', '');
+        const reqConfig = phaseRequirements[pendingDrop.newPhase]?.find(r => r.id === keyId);
+        dynamicFields[reqConfig ? reqConfig.label : keyId] = input.value.trim();
+      }
     }
     
     const { cardId, newPhase } = pendingDrop;
@@ -674,6 +769,11 @@
     }
   }
 
+  async function quickChangePhase(cardId, newPhase) {
+    if (!newPhase) return;
+    await moveCardPhase(cardId, newPhase);
+  }
+
   async function moveCardPhase(cardId, newPhase, dynamicFields = null) {
     try {
       const payload = {
@@ -690,6 +790,23 @@
       });
       if (!res.ok) {
         const d = await res.json();
+        
+        // === PHASE GATE HANDLING ===
+        if (d.phase_gate) {
+          if (d.gate_type === 'checklist') {
+            toast(`⚠️ ${d.error}`, 'error');
+            return;
+          }
+          if (d.gate_type === 'assignee') {
+            toast(`⚠️ ${d.error}`, 'error');
+            return;
+          }
+          if (d.gate_type === 'fields' && d.missing_fields) {
+            openPhaseGateModal(cardId, newPhase, d.missing_fields);
+            return;
+          }
+        }
+        
         throw new Error(d.error || 'Erro ao mover');
       }
       toast('Task movida!', 'success');
@@ -699,10 +816,58 @@
     }
   }
 
+  /**
+   * Abre o modal de Phase Gate com campos obrigatórios retornados pela API.
+   */
+  function openPhaseGateModal(cardId, newPhase, missingFields) {
+    const phaseName = allPhases.find(p => p.id === newPhase)?.name || newPhase;
+    
+    const body = document.getElementById('dyn-modal-body');
+    body.innerHTML = `
+      <div style="margin-bottom:16px; padding:12px; background:rgba(245,158,11,0.1); border:1px solid rgba(245,158,11,0.3); border-radius:8px;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+          <i class="fa-solid fa-shield-halved" style="color:#f59e0b;"></i>
+          <strong style="color:#f59e0b;">Política de Fase</strong>
+        </div>
+        <p style="color:rgba(255,255,255,0.7); font-size:13px; margin:0;">
+          Para mover para <strong>${esc(phaseName)}</strong>, preencha os campos obrigatórios abaixo:
+        </p>
+      </div>
+    `;
+    
+    missingFields.forEach(field => {
+      const fg = document.createElement('div');
+      fg.className = 'fg';
+      fg.innerHTML = `<label for="dyn-gate-${field.id}">${esc(field.name)} <span style="color:#ef4444;">*</span></label>`;
+      
+      if (field.type === 'url') {
+        fg.innerHTML += `<input type="url" id="dyn-gate-${field.id}" class="fc dyn-gate-input" data-field-id="${field.id}" data-field-name="${esc(field.name)}" placeholder="https://..." required>`;
+      } else if (field.type === 'number') {
+        fg.innerHTML += `<input type="number" id="dyn-gate-${field.id}" class="fc dyn-gate-input" data-field-id="${field.id}" data-field-name="${esc(field.name)}" placeholder="0" required>`;
+      } else if (field.type === 'date') {
+        fg.innerHTML += `<input type="date" id="dyn-gate-${field.id}" class="fc dyn-gate-input" data-field-id="${field.id}" data-field-name="${esc(field.name)}" required>`;
+      } else if (field.type === 'dropdown' && field.options) {
+        let opts = [];
+        try { opts = JSON.parse(field.options); } catch(e) {}
+        fg.innerHTML += `<select id="dyn-gate-${field.id}" class="fc dyn-gate-input" data-field-id="${field.id}" data-field-name="${esc(field.name)}" required>
+          <option value="">Selecione...</option>
+          ${opts.map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join('')}
+        </select>`;
+      } else {
+        fg.innerHTML += `<input type="text" id="dyn-gate-${field.id}" class="fc dyn-gate-input" data-field-id="${field.id}" data-field-name="${esc(field.name)}" placeholder="" required>`;
+      }
+      body.appendChild(fg);
+    });
+
+    // Override pendingDrop for the dynamic form submission
+    pendingDrop = { cardId, newPhase, isGate: true };
+    openModal('modal-dynamic');
+  }
+
   // ============================================================
   // CREATE TASK MODAL
   // ============================================================
-  function openCreateModal() {
+  async function openCreateModal() {
     const sel = document.getElementById('ct-phase');
     sel.innerHTML = allPhases.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
     document.getElementById('ct-title').value = '';
@@ -716,23 +881,79 @@
     
     openModal('modal-create');
     setTimeout(() => document.getElementById('ct-title').focus(), 100);
+
+    // Carregar Start Fields dinâmicos
+    const boardId = document.getElementById('ct-board') ? document.getElementById('ct-board').value : 1;
+    const container = document.getElementById('ct-dynamic-fields-container');
+    if (container) {
+      container.innerHTML = '<div style="color:var(--text-muted); font-size:12px;">Carregando campos do Start Form...</div>';
+      try {
+        const res = await fetch(`/api/boards/${boardId}/fields`, { headers: getAuthHeaders() });
+        if (res.ok) {
+          const fields = await res.json();
+          const startFields = fields.filter(f => f.is_required_on_start === 1);
+          if (startFields.length === 0) {
+            container.innerHTML = '';
+          } else {
+            let html = '<div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.1);"><h4 style="margin: 0 0 12px 0; font-size: 13px; color: var(--accent);">Start Form</h4>';
+            startFields.forEach(field => {
+              html += `<label class="form-label">${esc(field.name)} <span style="color:#ef4444">*</span></label>`;
+              if (field.type === 'url') {
+                html += `<input type="url" class="text-input dyn-start-input" data-field-id="${field.id}" required>`;
+              } else if (field.type === 'number') {
+                html += `<input type="number" class="text-input dyn-start-input" data-field-id="${field.id}" required>`;
+              } else if (field.type === 'date') {
+                html += `<input type="date" class="text-input dyn-start-input" data-field-id="${field.id}" required>`;
+              } else if (field.type === 'dropdown' && field.options) {
+                let opts = [];
+                try { opts = JSON.parse(field.options); } catch(e) {}
+                html += `<select class="text-input dyn-start-input" data-field-id="${field.id}" required>
+                  <option value="">Selecione...</option>
+                  ${opts.map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join('')}
+                </select>`;
+              } else {
+                html += `<input type="text" class="text-input dyn-start-input" data-field-id="${field.id}" required>`;
+              }
+            });
+            html += '</div>';
+            container.innerHTML = html;
+          }
+        }
+      } catch(err) {
+        container.innerHTML = '';
+      }
+    }
   }
 
   async function submitCreateTask() {
     const title = document.getElementById('ct-title').value.trim();
     const desc = document.getElementById('ct-desc').value;
     const phase = document.getElementById('ct-phase').value;
+    const boardId = document.getElementById('ct-board') ? document.getElementById('ct-board').value : 1;
     const dueDate = document.getElementById('ct-due-date').value || null;
     const labels = selectedCreateLabels.map(l => l.id);
 
     if (!title) { toast('Título obrigatório.', 'error'); return; }
 
     try {
+      // Coletar start fields
+      const startInputs = document.querySelectorAll('.dyn-start-input');
+      const startFieldsArr = [];
+      for (const input of startInputs) {
+        if (input.hasAttribute('required') && !input.value.trim()) {
+          toast('Preencha os campos obrigatórios do Start Form.', 'error');
+          return;
+        }
+        if (input.value.trim()) {
+          startFieldsArr.push({ field_id: input.dataset.fieldId, value: input.value.trim() });
+        }
+      }
+
       const res = await fetch('/api/tasks', {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({
-          title, description: desc, phase, time_spent: 0,
+          title, description: desc, phase, board_id: boardId, time_spent: 0,
           due_date: dueDate,
           labels,
           actor_name: currentUser?.name || 'Web',
@@ -741,6 +962,19 @@
       });
       const d = await res.json();
       if (!res.ok) throw new Error(d.error || 'Erro ao criar.');
+      
+      // Salvar Start Fields se existirem
+      if (startFieldsArr.length > 0) {
+        try {
+          await fetch(`/api/tasks/${d.id}/fields`, {
+            method: 'PUT',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ fields: startFieldsArr })
+          });
+        } catch(e) {
+          console.error('Erro ao salvar start fields', e);
+        }
+      }
       
       // Process Checklists if any
       const validItems = createChecklistItems.filter(i => i.title.trim());
@@ -768,7 +1002,7 @@
       document.getElementById('ct-title').value = '';
       document.getElementById('ct-desc').value = '';
       createTaskLabels = [];
-      renderLabelBadges('create');
+      renderSelectedLabels('create');
       createChecklistItems = [];
       renderCreateTaskChecklist();
       
@@ -789,6 +1023,18 @@
     const res = await fetch(`/api/tasks/${taskId}`);
     if (!res.ok) { toast('Task não encontrada.', 'error'); return; }
     const task = await res.json();
+    
+    switchRightTab('timeline');
+
+    const forumLink = document.getElementById('d-forum-link');
+    if (forumLink) {
+      if (task.discord_thread_id && currentGuildId) {
+        forumLink.href = `https://discord.com/channels/${currentGuildId}/${task.discord_thread_id}`;
+        forumLink.style.display = 'inline-flex';
+      } else {
+        forumLink.style.display = 'none';
+      }
+    }
 
     // Store snapshot of original values for change detection
     currentTaskSnapshot = {
@@ -938,22 +1184,105 @@
   // SIDEBAR RIGHT TABS: TIMELINE & PHASE LOGS
   // ============================================================
   function switchRightTab(tab) {
-    const timelineBtn = document.getElementById('btn-tab-timeline');
-    const phaseBtn    = document.getElementById('btn-tab-phase-logs');
-    const timelineContent = document.getElementById('tab-content-timeline');
-    const phaseContent    = document.getElementById('tab-content-phase-logs');
+    const tabs = ['timeline', 'fields', 'phase-logs'];
+    
+    tabs.forEach(t => {
+      const btn = document.getElementById(`btn-tab-${t}`);
+      const content = document.getElementById(`tab-content-${t}`);
+      if (!btn || !content) return;
+      
+      if (t === tab) {
+        btn.classList.add('active');
+        btn.style.color = '#fff';
+        content.style.display = 'flex';
+      } else {
+        btn.classList.remove('active');
+        btn.style.color = 'var(--text-muted)';
+        content.style.display = 'none';
+      }
+    });
 
-    if (tab === 'timeline') {
-      timelineBtn.classList.add('active');    timelineBtn.style.color = '#fff';
-      phaseBtn.classList.remove('active');   phaseBtn.style.color = 'var(--text-muted)';
-      timelineContent.style.display = 'flex';
-      phaseContent.style.display    = 'none';
-    } else {
-      phaseBtn.classList.add('active');       phaseBtn.style.color = '#fff';
-      timelineBtn.classList.remove('active'); timelineBtn.style.color = 'var(--text-muted)';
-      timelineContent.style.display = 'none';
-      phaseContent.style.display    = 'flex';
+    if (tab === 'phase-logs') {
       loadPhaseLogs(currentTaskId);
+    } else if (tab === 'fields') {
+      loadTaskFields(currentTaskId);
+    }
+  }
+
+  async function loadTaskFields(taskId) {
+    const container = document.getElementById('task-fields-container');
+    if (!container) return;
+    
+    container.innerHTML = '<div class="no-items" style="font-size:12px;">Carregando campos...</div>';
+    
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/fields`);
+      if (!res.ok) throw new Error('Erro ao buscar campos.');
+      const fields = await res.json();
+      
+      if (fields.length === 0) {
+        container.innerHTML = '<div class="no-items" style="font-size:12px;">Nenhum campo disponível neste quadro.</div>';
+        return;
+      }
+      
+      let html = '';
+      fields.forEach(f => {
+        html += `<div class="fg" style="margin-bottom: 12px;">`;
+        html += `<label class="form-label">${esc(f.field_name)}</label>`;
+        
+        const val = f.value || '';
+        
+        if (f.field_type === 'url') {
+          html += `<input type="url" class="text-input dyn-task-field-input" data-field-id="${f.field_id}" value="${esc(val)}" placeholder="https://...">`;
+        } else if (f.field_type === 'number') {
+          html += `<input type="number" class="text-input dyn-task-field-input" data-field-id="${f.field_id}" value="${esc(val)}">`;
+        } else if (f.field_type === 'date') {
+          html += `<input type="date" class="text-input dyn-task-field-input" data-field-id="${f.field_id}" value="${esc(val)}">`;
+        } else if (f.field_type === 'dropdown' && f.field_options) {
+          let opts = [];
+          try { opts = JSON.parse(f.field_options); } catch(e) {}
+          html += `<select class="text-input dyn-task-field-input" data-field-id="${f.field_id}">
+            <option value="">Selecione...</option>
+            ${opts.map(o => `<option value="${esc(o)}" ${o === val ? 'selected' : ''}>${esc(o)}</option>`).join('')}
+          </select>`;
+        } else {
+          html += `<input type="text" class="text-input dyn-task-field-input" data-field-id="${f.field_id}" value="${esc(val)}">`;
+        }
+        
+        html += `</div>`;
+      });
+      
+      container.innerHTML = html;
+    } catch(err) {
+      container.innerHTML = `<div class="no-items" style="font-size:12px; color:#ef4444;">${esc(err.message)}</div>`;
+    }
+  }
+
+  async function saveTaskFields() {
+    if (!currentTaskId) return;
+    
+    const btn = document.querySelector('#tab-content-fields button');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Salvando...'; }
+    
+    const inputs = document.querySelectorAll('.dyn-task-field-input');
+    const fieldsArr = [];
+    inputs.forEach(input => {
+      fieldsArr.push({ field_id: input.dataset.fieldId, value: input.value.trim() });
+    });
+    
+    try {
+      const res = await fetch(`/api/tasks/${currentTaskId}/fields`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ fields: fieldsArr })
+      });
+      if (!res.ok) throw new Error('Erro ao salvar campos.');
+      
+      toast('Campos salvos!', 'success');
+    } catch(err) {
+      toast(err.message, 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Salvar Campos'; }
     }
   }
 
@@ -1346,23 +1675,25 @@
     } catch (e) { toast(e.message, 'error'); }
   }
 
-  async function deleteChecklist(id) {
-    if (!confirm('Deseja excluir esta subtarefa?')) return;
-    try {
-      const res = await fetch('/api/checklists/' + id, {
-        method: 'DELETE', headers: getAuthHeadersDelete(),
-        body: JSON.stringify({
-          actor_name: (currentUser && currentUser.name) ? currentUser.name : 'Web',
-          actor_discord_id: (currentUser && currentUser.id) ? currentUser.id : null
-        })
-      });
-      if (!res.ok) throw new Error('Erro ao excluir');
-      currentTaskChecklists = currentTaskChecklists.filter(c => c.id !== id);
-      expandedChecklists.delete(id);
-      renderChecklists();
-      renderBoard();
-    } catch (e) { toast(e.message, 'error'); }
-  }
+  window.deleteChecklist = function(id) {
+    openConfirmModal('Excluir Subtarefa', 'Deseja excluir esta subtarefa?', 'Excluir', async () => {
+      try {
+        const res = await fetch('/api/checklists/' + id, {
+          method: 'DELETE',
+          headers: getAuthHeadersDelete(),
+          body: JSON.stringify({
+            actor_name: (currentUser && currentUser.name) ? currentUser.name : 'Web',
+            actor_discord_id: (currentUser && currentUser.id) ? currentUser.id : null
+          })
+        });
+        if (!res.ok) throw new Error('Erro ao excluir');
+        currentTaskChecklists = currentTaskChecklists.filter(c => c.id !== id);
+        expandedChecklists.delete(id);
+        renderChecklists();
+        renderBoard();
+      } catch (e) { toast(e.message, 'error'); }
+    });
+  };
 
 
     // Close buttons trigger auto-save
@@ -1592,30 +1923,31 @@
     }
   }
 
-  async function deleteLabelGlobal(id, type) {
-    if (!confirm('Excluir esta etiqueta globalmente? Ela será removida de todas as tasks.')) return;
-    try {
-      const res = await fetch(`/api/labels/${id}`, {
-        method: 'DELETE',
-        headers: getAuthHeadersDelete()
-      });
-      const d = await res.json();
-      if (!res.ok) throw new Error(d.error || 'Erro ao excluir etiqueta.');
-      
-      toast('Etiqueta excluída.', 'success');
-      allLabels = allLabels.filter(l => l.id !== id);
-      selectedCreateLabels = selectedCreateLabels.filter(l => l.id !== id);
-      currentTaskLabels = currentTaskLabels.filter(l => l.id !== id);
-      
-      renderSelectedLabels('create');
-      renderSelectedLabels('details');
-      renderLabelDropdownList(type);
-      
-      await renderBoard();
-    } catch (err) {
-      toast(err.message, 'error');
-    }
-  }
+  window.deleteLabelGlobal = function(id, type) {
+    openConfirmModal('Excluir Etiqueta', 'Excluir esta etiqueta globalmente? Ela será removida de todas as tasks.', 'Excluir', async () => {
+      try {
+        const res = await fetch(`/api/labels/${id}`, {
+          method: 'DELETE',
+          headers: getAuthHeadersDelete()
+        });
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.error || 'Erro ao excluir etiqueta.');
+        
+        toast('Etiqueta excluída.', 'success');
+        allLabels = allLabels.filter(l => l.id !== id);
+        selectedCreateLabels = selectedCreateLabels.filter(l => l.id !== id);
+        currentTaskLabels = currentTaskLabels.filter(l => l.id !== id);
+        
+        renderSelectedLabels('create');
+        renderSelectedLabels('details');
+        renderLabelDropdownList(type);
+        
+        await renderBoard();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    });
+  };
 
   // ============================================================
   // UNIFIED TIMELINE (COMMENTS & ACTIVITY)
@@ -1706,11 +2038,11 @@
             return;
           }
 
-          const isForm = item.text.includes('ðŸ“ **Formulário Preenchido');
+          const isForm = item.text.includes('ðŸ“  **Formulário Preenchido');
           let displayHtml = esc(item.text).replace(/\n/g, '<br>');
           if (isForm) {
             displayHtml = item.text
-              .replace(/ðŸ“ \*\*Formulário Preenchido na Mudança de Fase:\*\*/, '<div style="font-weight:700;color:var(--accent);margin-bottom:6px;"><i class="fa-solid fa-clipboard-check"></i> Formulário Preenchido</div>')
+              .replace(/ðŸ“  \*\*Formulário Preenchido na Mudança de Fase:\*\*/, '<div style="font-weight:700;color:var(--accent);margin-bottom:6px;"><i class="fa-solid fa-clipboard-check"></i> Formulário Preenchido</div>')
               .replace(/\*\*(.*?)\*\*:/g, '<strong style="color:#cbd5e1;">$1:</strong>')
               .replace(/\n/g, '<br>');
           }
@@ -1768,19 +2100,20 @@
     } catch (e) { toast(e.message, 'error'); }
   }
 
-  async function deleteComment(id) {
-    if (!confirm('Deseja realmente excluir este comentário?')) return;
-    try {
-      const res = await fetch(`/api/comments/${id}`, {
-        method: 'DELETE',
-        headers: getAuthHeadersDelete(),
-        body: JSON.stringify({ actor_name: currentUser?.name })
-      });
-      if (!res.ok) throw new Error('Falha ao excluir.');
-      toast('Comentário removido.', 'success');
-      await loadTimeline(currentTaskId);
-    } catch (e) { toast(e.message, 'error'); }
-  }
+  window.deleteComment = function(id) {
+    openConfirmModal('Excluir Comentário', 'Deseja realmente excluir este comentário?', 'Excluir', async () => {
+      try {
+        const res = await fetch(`/api/comments/${id}`, {
+          method: 'DELETE',
+          headers: getAuthHeadersDelete(),
+          body: JSON.stringify({ actor_name: currentUser?.name })
+        });
+        if (!res.ok) throw new Error('Falha ao excluir.');
+        toast('Comentário removido.', 'success');
+        await loadTimeline(currentTaskId);
+      } catch (e) { toast(e.message, 'error'); }
+    });
+  };
 
   async function submitComment() {
     const input = document.getElementById('new-comment');
@@ -1809,27 +2142,27 @@
   // ============================================================
   // DELETE TASK
   // ============================================================
-  async function confirmDeleteTask() {
-    if (!currentTaskId) return;
-    if (!confirm('Tem certeza que deseja excluir esta task? Esta ação não pode ser desfeita.')) return;
-    try {
-      const res = await fetch(`/api/tasks/${currentTaskId}`, {
-        method: 'DELETE',
-        headers: getAuthHeadersDelete()
-      });
-      if (!res.ok && res.status !== 404) {
-        const d = await res.json().catch(() => ({}));
-        throw new Error(d.error || 'Erro ao excluir.');
+  window.deleteTask = function() {
+    openConfirmModal('Excluir Task', 'Tem certeza que deseja excluir esta task? Esta ação não pode ser desfeita.', 'Excluir', async () => {
+      try {
+        const res = await fetch(`/api/tasks/${currentTaskId}`, {
+          method: 'DELETE',
+          headers: getAuthHeadersDelete()
+        });
+        if (!res.ok && res.status !== 404) {
+          const d = await res.json().catch(() => ({}));
+          throw new Error(d.error || 'Erro ao excluir.');
+        }
+        toast('Task excluída.', 'success');
+        closeModal('modal-details');
+        currentTaskId = null;
+        currentTaskSnapshot = null;
+        await renderBoard();
+      } catch (err) {
+        toast(err.message, 'error');
       }
-      toast('Task excluída.', 'success');
-      closeModal('modal-details');
-      currentTaskId = null;
-      currentTaskSnapshot = null;
-      await renderBoard();
-    } catch (err) {
-      toast(err.message, 'error');
-    }
-  }
+    });
+  };
 
   // ============================================================
   // COLUMN MANAGEMENT
@@ -1881,23 +2214,23 @@
       toast(err.message, 'error');
     }
   }
-
-  async function deleteColumn(id) {
-    if (!confirm('Excluir esta fase? Só é possível se estiver vazia.')) return;
-    try {
-      const res = await fetch(`/api/phases/${id}`, {
-        method: 'DELETE',
-        headers: getAuthHeadersDelete()
-      });
-      const d = await res.json();
-      if (!res.ok) throw new Error(d.error || 'Erro ao excluir fase.');
-      toast('Fase excluída.', 'success');
-      await loadPhases();
-      await renderBoard();
-    } catch (err) {
-      toast(err.message, 'error');
-    }
-  }
+  window.deleteColumn = function(id) {
+    openConfirmModal('Excluir Fase', 'Excluir esta fase? Só é possível se estiver vazia.', 'Excluir', async () => {
+      try {
+        const res = await fetch(`/api/phases/${id}`, {
+          method: 'DELETE',
+          headers: getAuthHeaders()
+        });
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.error || 'Erro ao excluir fase.');
+        toast('Fase excluída.', 'success');
+        await loadPhases();
+        await renderBoard();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    });
+  };
 
   // ============================================================
   // MODAL HELPERS
@@ -1912,10 +2245,13 @@
 
 
   // Close modals on overlay click (except details — it has custom handler)
-  ['modal-create', 'modal-column', 'modal-dynamic'].forEach(id => {
-    document.getElementById(id).addEventListener('click', e => {
-      if (e.target === document.getElementById(id)) closeModal(id);
-    });
+  ['modal-create', 'modal-column', 'modal-dynamic', 'modal-drilldown', 'modal-create-board'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.addEventListener('click', e => {
+        if (e.target === el) closeModal(id);
+      });
+    }
   });
 
   // Global click listener to close label dropdowns when clicking outside
@@ -2082,13 +2418,18 @@ function switchTab(tab) {
   const activeBtn = document.getElementById(`tab-${tab}`);
   if (activeBtn) activeBtn.classList.add('active');
 
-  // Views — remove inline style overrides and toggle via class
+  // Views - remove inline style overrides and toggle via class
   document.querySelectorAll('.view-section').forEach(v => {
     v.classList.remove('active');
     v.style.removeProperty('display'); // Remove inline display:none so CSS class works
   });
-  const activeView = document.getElementById(`view-${tab}`);
-  if (activeView) activeView.classList.add('active');
+  
+  if (tab === 'kanban') {
+    if (typeof openHub === 'function') openHub(false);
+  } else {
+    const activeView = document.getElementById(`view-${tab}`);
+    if (activeView) activeView.classList.add('active');
+  }
 
   // Filter bar only visible in Kanban
   const filterBar = document.getElementById('filter-bar-container');
@@ -2299,3 +2640,82 @@ async function loadGamificationDashboard() {
     </td></tr>`;
   }
 }
+
+/**
+ * Abre o modal de detalhamento (Drilldown) para uma métrica específica.
+ */
+window.openDrilldown = async function(type) {
+  const modal = document.getElementById('modal-drilldown');
+  const titleEl = document.getElementById('drilldown-title');
+  const contentEl = document.getElementById('drilldown-content');
+
+  if (!modal || !titleEl || !contentEl) return;
+
+  if (type === 'blocked') {
+    titleEl.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> Tasks Bloqueadas';
+  } else if (type === 'bottlenecks') {
+    titleEl.innerHTML = '<i class="fa-solid fa-road-barrier"></i> Gargalos Atuais';
+  } else {
+    titleEl.innerHTML = '<i class="fa-solid fa-list"></i> Detalhes da Métrica';
+  }
+
+  contentEl.innerHTML = '<div class="no-items">Carregando dados...</div>';
+  openModal('modal-drilldown');
+
+  try {
+    const res = await fetch(`/api/stats/drilldown/${type}`, {
+      headers: getAuthHeaders()
+    });
+    if (!res.ok) throw new Error('Falha ao carregar detalhes');
+    
+    const tasks = await res.json();
+    
+    if (tasks.length === 0) {
+      contentEl.innerHTML = '<div class="no-items">Nenhuma task encontrada para esta métrica.</div>';
+      return;
+    }
+
+    contentEl.innerHTML = tasks.map(t => `
+      <div class="drilldown-item" data-task-id="${t.id}">
+        <div>
+          <div class="drilldown-item-title">#${t.id} - ${esc(t.title)}</div>
+          <div class="drilldown-item-meta">
+            <span class="board-badge" style="margin:0; padding:2px 6px; font-size:10px; background: rgba(255,255,255,0.1); border-left: 2px solid var(--accent); margin-right:6px;">${esc(t.board)}</span>
+            Fase: ${esc(t.phase)} &nbsp;&bull;&nbsp; Resp: ${esc(t.assignee_name)}
+          </div>
+        </div>
+        <i class="fa-solid fa-chevron-right" style="color:var(--text-muted); font-size:12px;"></i>
+      </div>
+    `).join('');
+
+    // Attach click handlers to navigate to task details
+    contentEl.querySelectorAll('.drilldown-item').forEach(el => {
+      el.addEventListener('click', () => {
+        const taskId = el.getAttribute('data-task-id');
+        closeModal('modal-drilldown');
+        openDetailsModal(taskId);
+      });
+    });
+  } catch (error) {
+    contentEl.innerHTML = `<div class="no-items" style="color:var(--danger);">${error.message}</div>`;
+  }
+};
+
+window.openConfirmModal = function(title, message, btnText, onConfirm) {
+  document.getElementById('confirm-modal-title').innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> ' + esc(title);
+  document.getElementById('confirm-modal-message').innerText = message;
+  
+  const btn = document.getElementById('confirm-modal-btn');
+  btn.innerText = btnText || 'Confirmar Exclusão';
+  
+  // Clone button to remove old event listeners
+  const newBtn = btn.cloneNode(true);
+  btn.parentNode.replaceChild(newBtn, btn);
+  
+  newBtn.addEventListener('click', () => {
+    closeModal('modal-confirm');
+    if (typeof onConfirm === 'function') onConfirm();
+  });
+  
+  openModal('modal-confirm');
+};

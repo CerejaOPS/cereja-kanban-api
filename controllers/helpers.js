@@ -35,11 +35,11 @@ export function broadcastBoardUpdate(taskId, action) {
  * @param {string} event - Nome do evento (ex: 'task_created', 'task_phase_changed').
  * @param {Object} taskData - Dados completos da task formatada.
  */
-export function triggerWebhook(event, taskData) {
+export function triggerWebhook(event, taskData, actor = null) {
   fetch(`${BOT_BASE_URL}/webhook/kanban-event`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ event, task: taskData })
+    body: JSON.stringify({ event, task: taskData, actor })
   }).catch(err => console.error(`Failed to notify bot webhook for event ${event}:`, err.message));
 }
 
@@ -196,6 +196,9 @@ export function formatTask(task) {
     startedAt: task.active_owner_started_at
   } : null;
 
+  const boardRow = task.board_id ? db.prepare('SELECT * FROM boards WHERE id = ?').get(task.board_id) : null;
+  const board = boardRow ? { id: boardRow.id, name: boardRow.name, color: boardRow.color, icon: boardRow.icon } : null;
+
   return {
     ...task,
     id: String(task.id),
@@ -208,6 +211,7 @@ export function formatTask(task) {
     dueDate: task.due_date || null,
     activeOwner,
     current_phase: { id: task.phase, name: phaseName },
+    board,
     labels: taskLabels,
     checklists: checklistsWithDetails,
     assignees: task.assignee_name ? [{ 

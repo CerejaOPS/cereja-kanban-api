@@ -51,8 +51,18 @@ function ensureDefaultPhases() {
 
 export function initDatabase() {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS boards (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      color TEXT DEFAULT '#6C63FF',
+      icon TEXT DEFAULT '📋',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS tasks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      board_id INTEGER DEFAULT 1 REFERENCES boards(id) ON DELETE SET DEFAULT,
       title TEXT NOT NULL,
       description TEXT DEFAULT '',
       phase TEXT DEFAULT 'todo',
@@ -190,6 +200,37 @@ export function initDatabase() {
       role TEXT DEFAULT 'admin',
       created_at TEXT DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS board_fields (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      type TEXT DEFAULT 'text' CHECK(type IN ('text','number','date','url','dropdown')),
+      options TEXT DEFAULT NULL,
+      is_required_on_start INTEGER DEFAULT 0,
+      position INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS phase_rules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+      phase_id TEXT NOT NULL,
+      require_checklist_done INTEGER DEFAULT 0,
+      require_assignee INTEGER DEFAULT 0,
+      required_field_ids TEXT DEFAULT '[]',
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(board_id, phase_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS task_field_values (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      field_id INTEGER NOT NULL REFERENCES board_fields(id) ON DELETE CASCADE,
+      value TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(task_id, field_id)
+    );
   `);
 
   ensureColumn('tasks', 'active_owner_discord_id', 'TEXT DEFAULT NULL');
@@ -197,6 +238,19 @@ export function initDatabase() {
   ensureColumn('tasks', 'active_owner_avatar_url', 'TEXT DEFAULT NULL');
   ensureColumn('tasks', 'active_owner_started_at', 'TEXT DEFAULT NULL');
   ensureColumn('tasks', 'discord_thread_id', 'TEXT DEFAULT NULL');
+  ensureColumn('tasks', 'board_id', 'INTEGER DEFAULT 1');
+
+  // Criar quadro padrão se não existir nenhum
+  const hasBoards = db.prepare('SELECT COUNT(*) as count FROM boards').get().count > 0;
+  if (!hasBoards) {
+    const insertBoard = db.prepare('INSERT INTO boards (id, name, color, icon) VALUES (?, ?, ?, ?)');
+    insertBoard.run(1, 'Geral', '#6C63FF', '📋');
+    insertBoard.run(2, 'Front-end', '#3b82f6', '🎨');
+    insertBoard.run(3, 'Back-end', '#10b981', '⚙️');
+    insertBoard.run(4, 'Infraestrutura', '#f59e0b', '☁️');
+    insertBoard.run(5, 'Documentação', '#8b5cf6', '📄');
+  }
+
   ensureDefaultPhases();
 
   db.prepare('CREATE INDEX IF NOT EXISTS idx_task_time_entries_task ON task_time_entries(task_id, created_at)').run();

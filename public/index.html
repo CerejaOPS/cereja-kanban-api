@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CherDeal Kanban — Sistema Operacional Interno</title>
-  <meta name="description" content="Gestão interna de tasks e equipes CherDeal.">
+  <title>Cereja Kanban — Sistema Operacional Interno</title>
+  <meta name="description" content="Gestão interna de tasks e equipes Cereja.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -21,7 +21,7 @@
 <div id="login-page">
   <div class="login-box">
     <div class="login-icon"><i class="fa-solid fa-crosshairs"></i></div>
-    <h1 class="login-h1">CherDeal Kanban</h1>
+    <h1 class="login-h1">Cereja Kanban</h1>
     <p class="login-sub">Gestão de Tasks — Sistema Interno</p>
 
     <a class="discord-btn" href="/auth/discord">
@@ -32,7 +32,7 @@
 
     <form id="login-form">
       <label class="form-label" for="login-email">E-mail</label>
-      <input type="email" id="login-email" class="text-input" placeholder="admin@cherdeal.com" required>
+      <input type="email" id="login-email" class="text-input" placeholder="admin@Cereja.com" required>
       <label class="form-label" for="login-pass">Senha</label>
       <input type="password" id="login-pass" class="text-input" placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢" required>
       <button type="submit" class="primary-btn">Entrar</button>
@@ -45,8 +45,9 @@
 <div id="dashboard-page">
   <header>
     <div class="logo">
+      <button class="btn-back-hub" id="btn-back-hub" onclick="openHub()"><i class="fa-solid fa-arrow-left"></i> Hub</button>
       <div class="logo-icon"><i class="fa-solid fa-crosshairs"></i></div>
-      <div class="logo-name">CherDeal Kanban</div>
+      <div class="logo-name" id="app-logo-name">Cereja Kanban</div>
     </div>
 
     <!-- Tabs Navigation -->
@@ -99,7 +100,23 @@
     </div>
   </div>
 
-  <div id="view-kanban" class="view-section active">
+  <!-- Hub View -->
+  <div id="view-hub" class="view-section active">
+    <div class="hub-container">
+      <div class="hub-header">
+        <h2><i class="fa-solid fa-layer-group"></i> Seus Quadros</h2>
+        <div style="display: flex; gap: 12px;">
+          <button class="btn-new-kanban" onclick="openMyTasks()" style="background: rgba(108, 99, 255, 0.15); border: 1px solid rgba(108, 99, 255, 0.4);"><i class="fa-solid fa-user-check"></i> Minhas Tasks</button>
+          <button class="btn-new-kanban" onclick="openCreateBoardModal()"><i class="fa-solid fa-plus"></i> Novo Kanban</button>
+        </div>
+      </div>
+      <div class="boards-grid" id="boards-grid">
+        <div class="no-items">Carregando quadros...</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="view-kanban" class="view-section" style="display:none;">
     <div class="board-wrapper">
       <div class="board-area" id="board-area">
         <!-- Columns rendered dynamically -->
@@ -126,11 +143,11 @@
           <h3><i class="fa-solid fa-check-double"></i> Tasks Entregues</h3>
           <p id="metric-tasks-delivered">--</p>
         </div>
-        <div class="metric-card">
+        <div class="metric-card clickable" onclick="openDrilldown('blocked')">
           <h3><i class="fa-solid fa-triangle-exclamation"></i> Tasks Bloqueadas</h3>
           <p id="metric-tasks-blocked">--</p>
         </div>
-        <div class="metric-card">
+        <div class="metric-card clickable" onclick="openDrilldown('bottlenecks')">
           <h3><i class="fa-solid fa-road-barrier"></i> Gargalos Atuais</h3>
           <p id="metric-bottlenecks">--</p>
         </div>
@@ -214,6 +231,90 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="modal-create-board">
+  <div class="modal" style="width: 400px;">
+    <div class="modal-head">
+      <div class="modal-head-title"><i class="fa-solid fa-layer-group"></i> Criar Novo Quadro</div>
+      <button class="modal-close-btn" onclick="closeModal('modal-create-board')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <form id="create-board-form">
+        <div class="fg">
+          <label class="form-label" for="board-name">Nome do Quadro</label>
+          <input type="text" id="board-name" class="text-input fc" placeholder="Ex: Marketing" required>
+        </div>
+
+        <div class="fg">
+          <label class="form-label" for="board-color">Cor do Quadro</label>
+          <input type="color" id="board-color" class="text-input fc" value="#6C63FF" style="height: 40px; padding: 4px;" required>
+        </div>
+
+        <div class="fg">
+          <label class="form-label" for="board-icon">Ícone (Emoji)</label>
+          <input type="text" id="board-icon" class="text-input fc" placeholder="Ex: 🎯" value="🎯">
+        </div>
+
+        <div class="modal-actions" style="margin-top: 24px; display: flex; justify-content: flex-end; gap: 8px;">
+          <button type="button" class="btn btn-ghost" onclick="closeModal('modal-create-board')">Cancelar</button>
+          <button type="submit" class="btn btn-primary">Criar Quadro</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ========== MODAL: EDITAR QUADRO ========== -->
+<div class="modal-overlay" id="modal-edit-board">
+  <div class="modal" style="width: 400px;">
+    <div class="modal-head">
+      <div class="modal-head-title"><i class="fa-solid fa-gear"></i> Configurações do Quadro</div>
+      <button class="modal-close-btn" onclick="closeModal('modal-edit-board')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <form id="edit-board-form">
+        <input type="hidden" id="edit-board-id">
+        <div class="fg">
+          <label class="form-label" for="edit-board-name">Nome do Quadro</label>
+          <input type="text" id="edit-board-name" class="text-input fc" required>
+        </div>
+
+        <div class="fg">
+          <label class="form-label" for="edit-board-color">Cor do Quadro</label>
+          <input type="color" id="edit-board-color" class="text-input fc" style="height: 40px; padding: 4px;" required>
+        </div>
+
+        <div class="fg">
+          <label class="form-label" for="edit-board-icon">Ícone (Emoji)</label>
+          <input type="text" id="edit-board-icon" class="text-input fc">
+        </div>
+
+        <div class="modal-actions" style="display: flex; justify-content: space-between; margin-top: 24px;">
+          <button type="button" class="btn" style="background:rgba(239, 68, 68, 0.2); color:#ef4444; border:1px solid rgba(239, 68, 68, 0.4);" onclick="deleteBoard()">Excluir</button>
+          <div style="display:flex; gap:8px;">
+            <button type="button" class="btn btn-ghost" onclick="closeModal('modal-edit-board')">Cancelar</button>
+            <button type="submit" class="btn btn-primary">Salvar</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- ========== MODAL: DRILLDOWN METRICS ========== -->
+<div class="modal-overlay" id="modal-drilldown">
+  <div class="modal" style="max-width: 560px;">
+    <div class="modal-head">
+      <div class="modal-head-title" id="drilldown-title"><i class="fa-solid fa-list"></i> Detalhes da Métrica</div>
+      <button class="modal-close-btn" onclick="closeModal('modal-drilldown')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div id="drilldown-content" class="drilldown-list">
+        <div class="no-items">Carregando...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ========== MODAL: CREATE TASK ========== -->
 <div class="modal-overlay" id="modal-create">
   <div class="modal">
@@ -232,9 +333,16 @@
       </div>
       <div class="fg-row">
         <div class="fg">
+          <label for="ct-board">Quadro Kanban</label>
+          <select id="ct-board" class="fc" onchange="if(typeof openCreateModal === 'function') openCreateModal()"></select>
+        </div>
+        <div class="fg">
           <label for="ct-phase">Fase Inicial</label>
           <select id="ct-phase" class="fc"></select>
         </div>
+      </div>
+      <div id="ct-dynamic-fields-container"></div>
+      <div class="fg-row">
         <div class="fg">
           <label for="ct-due-date">Vencimento (opcional)</label>
           <input type="date" id="ct-due-date" class="fc">
@@ -296,6 +404,7 @@
         <span class="phase-badge" id="d-phase-badge">TO-DO</span>
         <input type="text" id="edit-title-input" placeholder="Título da task">
       </div>
+      <a href="#" id="d-forum-link" target="_blank" class="btn btn-ghost" style="display:none; color:#6C63FF; text-decoration:none; margin-right:15px; font-weight:500; font-size:14px; align-items:center; gap:5px;">💬 Ver no Fórum</a>
       <button class="modal-close-btn" id="details-close-btn">&times;</button>
     </div>
     <div class="modal-body" style="display:flex; padding:0; overflow:hidden;">
@@ -412,9 +521,13 @@
 
       <!-- LADO DIREITO: TIMELINE & LOGS DA FASE -->
       <div class="task-timeline-right" style="width:360px; flex-shrink:0; display:flex; flex-direction:column;">
-        <div style="display:flex; border-bottom:1px solid var(--border); background:#111827;">
+        <!-- Tab Headers Direita -->
+        <div style="display:flex; border-bottom:1px solid rgba(255,255,255,0.08); background:rgba(0,0,0,0.15);">
           <button class="tab-btn active" id="btn-tab-timeline" onclick="switchRightTab('timeline')" style="flex:1; border:none; padding:12px; background:transparent; color:#fff; font-weight:600; cursor:pointer; font-family:inherit; font-size:12px;">
             <i class="fa-solid fa-comments"></i> Timeline
+          </button>
+          <button class="tab-btn" id="btn-tab-fields" onclick="switchRightTab('fields')" style="flex:1; border:none; padding:12px; background:transparent; color:var(--text-muted); font-weight:600; cursor:pointer; font-family:inherit; font-size:12px;">
+            <i class="fa-solid fa-table-list"></i> Campos
           </button>
           <button class="tab-btn" id="btn-tab-phase-logs" onclick="switchRightTab('phase-logs')" style="flex:1; border:none; padding:12px; background:transparent; color:var(--text-muted); font-weight:600; cursor:pointer; font-family:inherit; font-size:12px;">
             <i class="fa-solid fa-chart-simple"></i> Logs da Fase
@@ -438,7 +551,17 @@
           </div>
         </div>
 
-        <!-- Conteúdo 2: Logs da Fase -->
+        <!-- Conteúdo 2: Campos -->
+        <div id="tab-content-fields" style="display:none; flex:1; flex-direction:column; overflow-y:auto; padding:16px; min-height:0;">
+          <div id="task-fields-container">
+            <div class="no-items" style="font-size:12px;">Nenhum campo disponível neste quadro.</div>
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="saveTaskFields()" style="margin-top: 16px; align-self: flex-start;">
+            <i class="fa-solid fa-floppy-disk"></i> Salvar Campos
+          </button>
+        </div>
+
+        <!-- Conteúdo 3: Logs da Fase -->
         <div id="tab-content-phase-logs" style="display:none; flex:1; flex-direction:column; overflow:hidden; min-height:0;">
           <!-- Filtros de Logs -->
           <div style="padding:10px 14px; border-bottom:1px solid var(--border); display:flex; flex-direction:column; gap:6px; background:rgba(0,0,0,0.2);">
@@ -471,7 +594,7 @@
 
     </div>
     <div class="modal-foot">
-      <button class="btn btn-danger-ghost btn-sm" onclick="confirmDeleteTask()">
+      <button class="btn btn-danger-ghost btn-sm" onclick="deleteTask()">
         <i class="fa-solid fa-trash"></i> Excluir
       </button>
       <span style="flex:1;"></span>
@@ -537,6 +660,24 @@
   </div>
 </div>
 
+<!-- ========== MODAL DE CONFIRMAÇÃO (REPLACE CONFIRM) ========== -->
+<div class="modal-overlay" id="modal-confirm">
+  <div class="modal" style="width: 400px;">
+    <div class="modal-head" style="border-bottom: none; padding-bottom: 0;">
+      <div class="modal-head-title" id="confirm-modal-title" style="color: #ef4444; font-size: 16px;"><i class="fa-solid fa-triangle-exclamation"></i> Atenção</div>
+      <button class="modal-close-btn" onclick="closeModal('modal-confirm')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p id="confirm-modal-message" style="color: var(--text-muted); font-size: 14px; margin-bottom: 24px; line-height: 1.5;"></p>
+      <div style="display: flex; justify-content: flex-end; gap: 8px;">
+        <button type="button" class="btn btn-ghost" onclick="closeModal('modal-confirm')">Cancelar</button>
+        <button type="button" class="btn" id="confirm-modal-btn" style="background: rgba(239,68,68,0.2); border: 1px solid rgba(239,68,68,0.5); color: #ef4444;">Confirmar Exclusão</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/js/hub.js"></script>
 <script src="/js/main.js"></script>
 </body>
 </html>

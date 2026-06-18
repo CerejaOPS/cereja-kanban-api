@@ -263,4 +263,41 @@ router.get('/api/stats/impediments', (req, res) => {
   }
 });
 
+// Drilldown de metricas para listar tasks especificas
+router.get('/api/stats/drilldown/:type', (req, res) => {
+  try {
+    const { type } = req.params;
+    let query = '';
+    
+    if (type === 'blocked') {
+      query = "SELECT * FROM tasks WHERE phase = 'bloqueado'";
+    } else if (type === 'bottlenecks') {
+      query = "SELECT * FROM tasks WHERE phase IN ('bloqueado', 'revisao')";
+    } else if (type === 'delivered') {
+      // Just an example, fetching recently delivered
+      query = "SELECT * FROM tasks WHERE phase = 'concluido' ORDER BY updated_at DESC LIMIT 50";
+    } else {
+      return res.status(400).json({ error: 'Tipo desconhecido' });
+    }
+
+    const tasks = db.prepare(query).all();
+    
+    // Attach boards and phases
+    const formatted = tasks.map(t => {
+      const b = t.board_id ? db.prepare('SELECT * FROM boards WHERE id = ?').get(t.board_id) : null;
+      return {
+        id: t.id,
+        title: t.title,
+        phase: t.phase,
+        board: b ? b.name : 'Geral',
+        assignee_name: t.assignee_name || 'Livre'
+      };
+    });
+
+    return res.json(formatted);
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
 export default router;

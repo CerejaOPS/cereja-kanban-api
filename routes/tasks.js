@@ -1,5 +1,5 @@
 /**
- * routes/tasks.js — CherDeal Kanban API - Roteador Principal
+ * routes/tasks.js — Cereja Kanban API - Roteador Principal
  * ===========================================================
  * Define todas as rotas da API REST do Kanban.
  *
@@ -239,14 +239,24 @@ router.get('/api/members', (req, res) => {
 // 1. GET /api/tasks (Public)
 router.get('/api/tasks', (req, res) => {
   try {
-    const { phase, limit } = req.query;
+    const { phase, limit, board_id, assignee_id } = req.query;
     
-    let query = 'SELECT * FROM tasks';
+    let query = 'SELECT * FROM tasks WHERE 1=1';
     const params = [];
     
     if (phase) {
-      query += ' WHERE phase = ?';
+      query += ' AND phase = ?';
       params.push(phase);
+    }
+    
+    if (board_id && board_id !== '0' && board_id !== 'all') {
+      query += ' AND board_id = ?';
+      params.push(parseInt(board_id, 10));
+    }
+
+    if (assignee_id) {
+      query += ' AND assignee_discord_id = ?';
+      params.push(assignee_id);
     }
     
     query += ' ORDER BY id DESC';
@@ -287,7 +297,7 @@ router.post('/api/tasks', requireAuthOrApiKey, (req, res) => {
       return res.status(403).json({ error: 'Apenas administradores ou PMs podem criar tarefas.' });
     }
 
-    const { title, description, phase = 'todo', due_date = null, actor_name = 'System', actor_discord_id = null, labels = [] } = req.body;
+    const { title, description, phase = 'todo', board_id = 1, due_date = null, actor_name = 'System', actor_discord_id = null, labels = [] } = req.body;
     
     if (!title || !title.trim()) {
       return res.status(400).json({ error: 'Title is required.' });
@@ -295,9 +305,9 @@ router.post('/api/tasks', requireAuthOrApiKey, (req, res) => {
     
     // Insert task
     const info = db.prepare(`
-      INSERT INTO tasks (title, description, phase, due_date, time_spent, last_edited_by_name, last_edited_by_discord_id) 
-      VALUES (?, ?, ?, ?, 0, ?, ?)
-    `).run(title.trim(), description || '', phase, due_date || null, actor_name, actor_discord_id);
+      INSERT INTO tasks (title, description, phase, board_id, due_date, time_spent, last_edited_by_name, last_edited_by_discord_id) 
+      VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+    `).run(title.trim(), description || '', phase, board_id, due_date || null, actor_name, actor_discord_id);
     
     const taskId = info.lastInsertRowid;
     
@@ -427,7 +437,7 @@ router.patch('/api/tasks/:id/phase', requireAuthOrApiKey, (req, res) => {
       } catch(e) { console.error('Error in webhook logic (phase route):', e); }
     }
 
-    triggerWebhook('task_phase_changed', formatTask(updatedTask));
+    triggerWebhook('task_phase_changed', formatTask(updatedTask), { name: actor_name, discordId: actor_discord_id });
     broadcastBoardUpdate(taskId, 'moved');
     return res.json(formatTask(updatedTask));
   } catch (error) {
@@ -593,9 +603,78 @@ router.patch('/api/tasks/:id', requireAuthOrApiKey, (req, res) => {
 
     // Phase change audit
     if (phase !== undefined && phase !== task.phase) {
-      // Validate phase
+      // Validate phase exists
       const phaseCheck = db.prepare('SELECT name FROM phases WHERE id = ?').get(phase);
       if (phaseCheck) {
+        // === PHASE GATE VALIDATION ===
+        const phaseRule = db.prepare('SELECT * FROM phase_rules WHERE board_id = ? AND phase_id = ?').get(task.board_id, phase);
+        if (phaseRule) {
+          // 1. Check: Checklist completa?
+          if (phaseRule.require_checklist_done) {
+            const pendingItems = db.prepare(
+              'SELECT COUNT(*) as count FROM task_checklists WHERE task_id = ? AND is_completed = 0'
+            ).get(taskId).count;
+            if (pendingItems > 0) {
+              return res.status(400).json({
+                error: `Checklist incompleta: ${pendingItems} item(ns) pendente(s). Complete todos os itens antes de mover para ${phaseCheck.name}.`,
+                phase_gate: true,
+                gate_type: 'checklist',
+                pending_count: pendingItems
+              });
+            }
+          }
+          // 2. Check: Responsável obrigatório?
+          if (phaseRule.require_assignee && !task.assignee_discord_id) {
+            return res.status(400).json({
+              error: `É necessário atribuir um responsável antes de mover para ${phaseCheck.name}.`,
+              phase_gate: true,
+              gate_type: 'assignee'
+            });
+          }
+          // 3. Check: Campos obrigatórios preenchidos?
+          let requiredFieldIds = [];
+          try { requiredFieldIds = JSON.parse(phaseRule.required_field_ids || '[]'); } catch(e) {}
+          if (requiredFieldIds.length > 0) {
+            const existingValues = db.prepare(
+              `SELECT field_id, value FROM task_field_values WHERE task_id = ? AND field_id IN (${requiredFieldIds.map(() => '?').join(',')})`
+            ).all(taskId, ...requiredFieldIds);
+            
+            const filledIds = existingValues.filter(v => v.value && v.value.trim() !== '').map(v => v.field_id);
+            const missingIds = requiredFieldIds.filter(id => !filledIds.includes(id));
+            
+            if (missingIds.length > 0) {
+              const missingFields = db.prepare(
+                `SELECT id, name, type, options FROM board_fields WHERE id IN (${missingIds.map(() => '?').join(',')})`
+              ).all(...missingIds);
+              
+              // Check if the request body includes dynamic_fields that fill the missing ones
+              const dynamicFilled = dynamic_fields ? Object.keys(dynamic_fields) : [];
+              const stillMissing = missingFields.filter(f => !dynamicFilled.includes(f.name));
+              
+              if (stillMissing.length > 0) {
+                return res.status(400).json({
+                  error: `Campos obrigatórios não preenchidos para mover para ${phaseCheck.name}.`,
+                  phase_gate: true,
+                  gate_type: 'fields',
+                  missing_fields: stillMissing
+                });
+              } else {
+                // Save the dynamic fields that were provided inline
+                const upsert = db.prepare(`
+                  INSERT INTO task_field_values (task_id, field_id, value)
+                  VALUES (?, ?, ?)
+                  ON CONFLICT(task_id, field_id) DO UPDATE SET value = excluded.value
+                `);
+                for (const field of missingFields) {
+                  const val = dynamic_fields[field.name];
+                  if (val) upsert.run(taskId, field.id, val);
+                }
+              }
+            }
+          }
+        }
+        // === END PHASE GATE ===
+        
         updateFields.push('phase = ?');
         params.push(phase);
         
@@ -792,6 +871,11 @@ router.post('/api/tasks/:id/comments', requireAuthOrApiKey, (req, res) => {
 
     const comment = db.prepare('SELECT * FROM comments WHERE id = ?').get(info.lastInsertRowid);
     
+    const fullTaskForWebhook = getTaskOrNull(taskId);
+    if (fullTaskForWebhook) {
+      triggerWebhook('task_commented', { task: formatTask(fullTaskForWebhook), comment });
+    }
+    
     broadcastBoardUpdate(taskId, 'commented');
     return res.status(201).json(comment);
   } catch (error) {
@@ -833,6 +917,11 @@ router.post('/api/tasks/:id/time', requireAuthOrApiKey, (req, res) => {
     });
 
     if (!entry) return res.status(400).json({ error: 'Informe um tempo maior que zero.' });
+
+    const updatedTaskForWebhook = getTaskOrNull(taskId);
+    if (updatedTaskForWebhook) {
+      triggerWebhook('task_time_logged', { task: formatTask(updatedTaskForWebhook), entry });
+    }
 
     broadcastBoardUpdate(taskId, 'time_logged');
     const updatedTask = getTaskOrNull(taskId);
@@ -882,7 +971,7 @@ router.post('/api/tasks/:id/observations', requireAuthOrApiKey, (req, res) => {
     `).run(taskId, task.phase, actor.name, actor.discordId, text.trim(), minutes);
 
     if (minutes > 0) {
-      addTimeEntry({
+      const entry = addTimeEntry({
         taskId,
         phase: task.phase,
         minutes,
@@ -891,6 +980,10 @@ router.post('/api/tasks/:id/observations', requireAuthOrApiKey, (req, res) => {
         actorName: actor.name,
         actorDiscordId: actor.discordId
       });
+      const updatedTaskForWebhook = getTaskOrNull(taskId);
+      if (updatedTaskForWebhook) {
+        triggerWebhook('task_time_logged', { task: formatTask(updatedTaskForWebhook), entry });
+      }
     }
 
     addTaskActivity(taskId, 'observation_added', task.phase, null, text.trim(), actor.name, actor.discordId);
@@ -1224,6 +1317,13 @@ router.patch('/api/checklists/:id', requireAuthOrApiKey, (req, res) => {
           actor_name,
           actor_discord_id
         );
+        const updatedTaskForWebhook = getTaskOrNull(cl.task_id);
+        if (updatedTaskForWebhook) {
+          triggerWebhook('task_time_logged', { 
+            task: formatTask(updatedTaskForWebhook), 
+            entry: { minutes: timeDelta, source: 'checklist', actorName: actor_name, actorDiscordId: actor_discord_id } 
+          });
+        }
       }
 
       // Record checklist activities
@@ -1299,8 +1399,14 @@ router.post('/api/checklists/:id/comments', requireAuthOrApiKey, (req, res) => {
       VALUES (?, ?, 'commented', ?, ?, ?)
     `).run(clId, cl.task_id, text, author_name, author_discord_id || null);
 
+    const commentObj = { id: info.lastInsertRowid, checklist_id: clId, author_name, author_discord_id, text };
+    const fullTaskForWebhook = getTaskOrNull(cl.task_id);
+    if (fullTaskForWebhook) {
+      triggerWebhook('task_commented', { task: formatTask(fullTaskForWebhook), comment: commentObj, is_checklist: true });
+    }
+
     broadcastBoardUpdate(cl.task_id, 'checklist_commented');
-    return res.status(201).json({ id: info.lastInsertRowid, checklist_id: clId, author_name, author_discord_id, text });
+    return res.status(201).json(commentObj);
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
