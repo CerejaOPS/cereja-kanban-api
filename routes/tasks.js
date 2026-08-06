@@ -1,1192 +1,706 @@
-/**
- * routes/tasks.js — Cereja Kanban API - Roteador Principal
- * ===========================================================
- * Define todas as rotas da API REST do Kanban.
- *
- * ARQUITETURA:
- *  - Funções auxiliares (formatTask, addTimeEntry, broadcastBoardUpdate, etc.)
- *    foram centralizadas em `controllers/helpers.js` para facilitar reuso.
- *  - Este arquivo contém apenas as declarações de rotas, organizadas por seções.
- *
- * SEÇÕES DE ROTAS:
- *  1. SSE          — Conexão em tempo real (Server-Sent Events)
- *  2. FASES        — Gerenciamento de colunas/fases do board
- *  3. LABELS       — Sistema de etiquetas coloridas
- *  4. MEMBERS      — Lista de membros da equipe
- *  5. TASKS        — CRUD principal de tasks
- *  6. PHASE MOVE   — Movimentação de tasks entre fases
- *  7. ASSIGN       — Atribuição de responsável
- *  8. EDIÇÃO       — Edição de campos (título, descrição, vencimento, etc.)
- *  9. COMMENTS     — Comentários e timeline
- * 10. TIME         — Registro de tempo gasto
- * 11. OBSERVATIONS — Notas/observações estratégicas
- * 12. OWNERSHIP    — Controle de "dono ativo" (quem está trabalhando agora)
- * 13. CHECKLISTS   — Etapas de execução (subtarefas)
- * 14. ACTIVITY     — Histórico de atividades por fase
- */
 import { Router } from 'express';
-import { db } from '../database.js';
-import { requireAuthOrApiKey } from '../middleware/auth.js';
-import {
-  sseClients,
-  broadcastBoardUpdate,
-  triggerWebhook,
+import { getDb } from '../lib/db.js';
+import { 
+  broadcastBoardUpdate, 
+  triggerWebhook, 
   triggerCriticalReviewWebhook,
   isAdminRequest,
   actorFromRequest,
   getTaskOrNull,
-  addTaskActivity,
   addTimeEntry,
-  getTimeSummary,
   formatTask
 } from '../controllers/helpers.js';
-
-export { broadcastBoardUpdate };
 
 const router = Router();
 
 // ==========================================
-// 1. SSE — Server-Sent Events
-// ==========================================
-/** Armazena conexões SSE ativas — gerenciado em controllers/helpers.js */
-
-/**
- * GET /api/events
- * Server-Sent Events (SSE) to push real-time board updates to clients.
- */
-router.get('/api/events', (req, res) => {
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders();
-
-  sseClients.add(res);
-
-  res.write(`data: ${JSON.stringify({ type: 'connected', message: 'SSE connection established.' })}\n\n`);
-
-  req.on('close', () => {
-    sseClients.delete(res);
-  });
-});
-
-
-// ─── Helpers abaixo foram movidos para controllers/helpers.js ─────────────────
-// broadcastBoardUpdate, isAdminRequest, actorFromRequest, getTaskOrNull,
-// addTaskActivity, addTimeEntry, getTimeSummary, triggerWebhook,
-// triggerCriticalReviewWebhook e formatTask são agora importados no topo.
-// ─────────────────────────────────────────────────────────────────────────────
-
-// ==========================================
-// 2. FASES — Colunas/Fases do Board
+// 1. FASES (PHASES)
 // ==========================================
 
-// List columns/phases sorted by position
-router.get('/api/phases', (req, res) => {
+router.get('/api/phases', async (req, res) => {
   try {
-    const phases = db.prepare('SELECT * FROM phases ORDER BY position ASC').all();
+    const db = await getDb();
+    const phases = await db.any('SELECT * FROM phases ORDER BY position ASC');
     return res.json(phases);
   } catch (error) {
     return res.status(500).json({ error: error.message });
   }
 });
 
-// Create new custom phase column
-router.post('/api/phases', requireAuthOrApiKey, (req, res) => {
+router.post('/api/phases', async (req, res) => {
   try {
-    const { name } = req.body;
-    if (!name || !name.trim()) {
-      return res.status(400).json({ error: 'Column name is required.' });
-    }
+    const { id, name } = req.body;
+    if (!id || !name) return res.status(400).json({ error: 'id and name are required' });
 
-    const id = name.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+    const db = await getDb();
+    const row = await db.one('SELECT COALESCE(MAX(position), 0) as max_pos FROM phases');
+    const position = parseInt(row.max_pos) + 1;
+
+    const newPhase = await db.one(`
+      INSERT INTO phases (id, name, position)
+      VALUES ($1, $2, $3)
+      RETURNING *
+    `, [id, name, position]);
     
-    // Check if ID already exists
-    const existing = db.prepare('SELECT id FROM phases WHERE id = ?').get(id);
-    if (existing) {
-      return res.status(400).json({ error: 'A column with a similar name already exists.' });
-    }
-
-    // Get max position to append column at the end
-    const maxPosRow = db.prepare('SELECT MAX(position) as maxPos FROM phases').get();
-    const nextPos = (maxPosRow && maxPosRow.maxPos !== null) ? maxPosRow.maxPos + 1 : 0;
-
-    db.prepare('INSERT INTO phases (id, name, position) VALUES (?, ?, ?)')
-      .run(id, name.trim(), nextPos);
-
-    broadcastBoardUpdate(0, 'phases_updated');
-    return res.status(201).json({ id, name: name.trim(), position: nextPos });
+    return res.status(201).json(newPhase);
   } catch (error) {
     return res.status(500).json({ error: error.message });
   }
 });
 
-// Rename or reorder columns
-router.patch('/api/phases/:id', requireAuthOrApiKey, (req, res) => {
+router.put('/api/phases/reorder', async (req, res) => {
   try {
-    const { name, position } = req.body;
-    const { id } = req.params;
+    const { phases } = req.body;
+    if (!Array.isArray(phases)) return res.status(400).json({ error: 'phases array is required' });
 
-    const column = db.prepare('SELECT * FROM phases WHERE id = ?').get(id);
-    if (!column) {
-      return res.status(404).json({ error: 'Column not found.' });
-    }
-
-    if (name !== undefined) {
-      db.prepare('UPDATE phases SET name = ? WHERE id = ?').run(name.trim(), id);
-    }
-
-    if (position !== undefined) {
-      db.prepare('UPDATE phases SET position = ? WHERE id = ?').run(position, id);
-    }
-
-    broadcastBoardUpdate(0, 'phases_updated');
-    return res.json({ id, ...column, ...req.body });
+    const db = await getDb();
+    await db.tx(async t => {
+      for (const p of phases) {
+        await t.none('UPDATE phases SET position = $1 WHERE id = $2', [p.position, p.id]);
+      }
+    });
+    
+    return res.json({ success: true });
   } catch (error) {
     return res.status(500).json({ error: error.message });
   }
 });
 
-// Delete an empty column
-router.delete('/api/phases/:id', requireAuthOrApiKey, (req, res) => {
+router.delete('/api/phases/:id', async (req, res) => {
   try {
     const { id } = req.params;
-
-    // Check if there are any tasks in this phase
-    const countRow = db.prepare('SELECT COUNT(*) as count FROM tasks WHERE phase = ?').get(id);
-    if (countRow && countRow.count > 0) {
-      return res.status(400).json({ error: 'Cannot delete column: column contains tasks.' });
-    }
-
-    db.prepare('DELETE FROM phases WHERE id = ?').run(id);
-
-    broadcastBoardUpdate(0, 'phases_updated');
-    return res.json({ success: true, message: 'Column deleted successfully.' });
+    const db = await getDb();
+    
+    // reassign tasks to backlog
+    await db.none('UPDATE tasks SET phase = $1 WHERE phase = $2', ['backlog', id]);
+    await db.none('DELETE FROM phases WHERE id = $1', [id]);
+    
+    return res.json({ success: true });
   } catch (error) {
     return res.status(500).json({ error: error.message });
   }
 });
 
-
-
 // ==========================================
-// 3. LABELS — Etiquetas Coloridas
+// 2. LABELS
 // ==========================================
 
-// List all reusable labels
-router.get('/api/labels', (req, res) => {
+router.get('/api/labels', async (req, res) => {
   try {
-    const labels = db.prepare('SELECT * FROM labels ORDER BY name ASC').all();
+    const db = await getDb();
+    const labels = await db.any('SELECT * FROM labels ORDER BY name ASC');
     return res.json(labels);
   } catch (error) {
     return res.status(500).json({ error: error.message });
   }
 });
 
-// Create new custom label
-router.post('/api/labels', requireAuthOrApiKey, (req, res) => {
+router.post('/api/labels', async (req, res) => {
   try {
     const { name, color } = req.body;
-    if (!name || !name.trim() || !color) {
-      return res.status(400).json({ error: 'Label name and solid color are required.' });
-    }
+    if (!name || !color) return res.status(400).json({ error: 'name and color are required' });
 
-    const info = db.prepare('INSERT OR IGNORE INTO labels (name, color) VALUES (?, ?)')
-      .run(name.trim(), color.trim());
-
-    if (info.changes === 0) {
-      const existing = db.prepare('SELECT * FROM labels WHERE name = ?').get(name.trim());
-      return res.json(existing);
-    }
-
-    return res.status(201).json({ id: info.lastInsertRowid, name: name.trim(), color: color.trim() });
+    const db = await getDb();
+    const newLabel = await db.one(`
+      INSERT INTO labels (name, color)
+      VALUES ($1, $2)
+      RETURNING *
+    `, [name, color]);
+    return res.status(201).json(newLabel);
   } catch (error) {
     return res.status(500).json({ error: error.message });
   }
 });
 
-// Delete a custom label
-router.delete('/api/labels/:id', requireAuthOrApiKey, (req, res) => {
+router.put('/api/labels/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    db.prepare('DELETE FROM task_labels WHERE label_id = ?').run(id);
-    db.prepare('DELETE FROM labels WHERE id = ?').run(id);
-    return res.json({ success: true, message: 'Label deleted successfully.' });
+    const { name, color } = req.body;
+    const db = await getDb();
+    
+    const updated = await db.one(`
+      UPDATE labels SET name = $1, color = $2, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $3
+      RETURNING *
+    `, [name, color, parseInt(id)]);
+    
+    return res.json(updated);
   } catch (error) {
     return res.status(500).json({ error: error.message });
   }
 });
 
-
-// ==========================================
-// 🚀 ENDPOINT DE MEMBROS MAPEADOS
-// ==========================================
-
-// List all mapped Discord users
-router.get('/api/members', (req, res) => {
+router.delete('/api/labels/:id', async (req, res) => {
   try {
-    const members = db.prepare('SELECT * FROM discord_users ORDER BY display_name ASC').all();
-    return res.json(members);
+    const db = await getDb();
+    await db.none('DELETE FROM labels WHERE id = $1', [parseInt(req.params.id)]);
+    return res.json({ success: true });
   } catch (error) {
     return res.status(500).json({ error: error.message });
   }
 });
 
-
 // ==========================================
-// 🚀 ENDPOINTS DE TASKS / TAREFAS
+// 3. MEMBERS (DISCORD USERS)
 // ==========================================
 
-// 1. GET /api/tasks (Public)
-router.get('/api/tasks', (req, res) => {
+router.get('/api/members', async (req, res) => {
   try {
-    const { phase, limit, board_id, assignee_id } = req.query;
-    
-    let query = 'SELECT * FROM tasks WHERE 1=1';
-    const params = [];
-    
-    if (phase) {
-      query += ' AND phase = ?';
-      params.push(phase);
-    }
-    
-    if (board_id && board_id !== '0' && board_id !== 'all') {
-      query += ' AND board_id = ?';
-      params.push(parseInt(board_id, 10));
-    }
+    const db = await getDb();
+    const users = await db.any('SELECT * FROM discord_users ORDER BY display_name ASC');
+    return res.json(users);
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
 
-    if (assignee_id) {
-      query += ' AND assignee_discord_id = ?';
-      params.push(assignee_id);
+// ==========================================
+// 4. TASKS (GET)
+// ==========================================
+
+router.get('/api/tasks', async (req, res) => {
+  try {
+    const db = await getDb();
+    let rawTasks;
+    if (req.query.board_id) {
+      rawTasks = await db.any('SELECT * FROM tasks WHERE board_id = $1 ORDER BY updated_at DESC', [parseInt(req.query.board_id)]);
+    } else {
+      rawTasks = await db.any('SELECT * FROM tasks ORDER BY updated_at DESC');
     }
     
-    query += ' ORDER BY id DESC';
-    
-    if (limit) {
-      query += ' LIMIT ?';
-      params.push(parseInt(limit, 10));
-    }
-    
-    const tasks = db.prepare(query).all(...params);
-    const formatted = tasks.map(formatTask);
-    
+    const formatted = await Promise.all(rawTasks.map(t => formatTask(t)));
     return res.json(formatted);
   } catch (error) {
     return res.status(500).json({ error: error.message });
   }
 });
 
-// 2. GET /api/tasks/:id (Public)
-router.get('/api/tasks/:id', (req, res) => {
+router.get('/api/tasks/:id', async (req, res) => {
   try {
-    const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
-    
-    if (!task) {
-      return res.status(404).json({ error: 'Task not found.' });
-    }
-    
-    return res.json(formatTask(task));
+    const task = await getTaskOrNull(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    const formatted = await formatTask(task);
+    return res.json(formatted);
   } catch (error) {
     return res.status(500).json({ error: error.message });
   }
 });
 
-// 3. POST /api/tasks (Requires Auth or API Key)
-router.post('/api/tasks', requireAuthOrApiKey, (req, res) => {
+// ==========================================
+// 5. TASKS (POST, PATCH phase, assign, thread)
+// ==========================================
+
+router.post('/api/tasks', async (req, res) => {
   try {
-    if (!req.isBot && req.user && req.user.role === 'user') {
-      return res.status(403).json({ error: 'Apenas administradores ou PMs podem criar tarefas.' });
-    }
+    const { title, phase, assignee_discord_id, labels, board_id } = req.body;
+    if (!title) return res.status(400).json({ error: 'title is required' });
 
-    const { title, description, phase = 'todo', board_id = 1, due_date = null, actor_name = 'System', actor_discord_id = null, labels = [] } = req.body;
-    
-    if (!title || !title.trim()) {
-      return res.status(400).json({ error: 'Title is required.' });
-    }
-    
-    // Insert task
-    const info = db.prepare(`
-      INSERT INTO tasks (title, description, phase, board_id, due_date, time_spent, last_edited_by_name, last_edited_by_discord_id) 
-      VALUES (?, ?, ?, ?, ?, 0, ?, ?)
-    `).run(title.trim(), description || '', phase, board_id, due_date || null, actor_name, actor_discord_id);
-    
-    const taskId = info.lastInsertRowid;
-    
-    // Link labels
-    if (labels && Array.isArray(labels)) {
-      for (const labelId of labels) {
-        db.prepare('INSERT OR IGNORE INTO task_labels (task_id, label_id) VALUES (?, ?)').run(taskId, labelId);
-      }
-    }
+    let assignee_name = null;
+    let assignee_email = null;
 
-    const newTask = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
-    
-    db.prepare(`
-      INSERT INTO activity_log (task_id, action, phase, to_phase, actor_name, actor_discord_id)
-      VALUES (?, 'created', ?, ?, ?, ?)
-    `).run(taskId, newTask.phase, newTask.phase, actor_name, actor_discord_id);
+    const db = await getDb();
 
-    triggerWebhook('task_created', formatTask(newTask));
-    broadcastBoardUpdate(taskId, 'created');
-    return res.status(201).json(formatTask(newTask));
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
-  }
-});
-
-// 4. PATCH /api/tasks/:id/phase - Direct transition phase shifter
-router.patch('/api/tasks/:id/phase', requireAuthOrApiKey, (req, res) => {
-  try {
-    const { phase, actor_name = 'Bot', actor_discord_id = null, from_phase = null, time_spent = null, time_note = '' } = req.body;
-    const taskId = req.params.id;
-    
-    if (!phase) {
-      return res.status(400).json({ error: 'Phase is required.' });
-    }
-    
-    // Check if phase is valid
-    const phaseCheck = db.prepare('SELECT id FROM phases WHERE id = ?').get(phase);
-    if (!phaseCheck) {
-      return res.status(400).json({ error: `Invalid phase column: ${phase}` });
-    }
-    
-    const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
-    if (!task) {
-      return res.status(404).json({ error: 'Task not found.' });
-    }
-    
-    // RBAC: Verificações de permissão para usuário comum
-    if (!req.isBot && req.user && req.user.role === 'user') {
-      const isAssignee = task.assignee_discord_id === req.user.id;
-      const isReviewPhase = task.phase === 'revisao' || phase === 'revisao';
-      const isBacklog = task.phase === 'backlog';
-      
-      if (isBacklog) {
-        return res.status(403).json({ error: 'Membros não podem retirar tarefas do backlog.' });
-      }
-      
-      if (!isAssignee && !isReviewPhase) {
-        return res.status(403).json({ error: 'Você só pode mover tarefas atribuídas a você, ou tarefas ligadas à Revisão.' });
-      }
-    }
-    
-    const actualFromPhase = from_phase || task.phase;
-    
-    if (actualFromPhase === phase) {
-      return res.json(formatTask(task)); // No phase change
-    }
-
-    // Direct update: updates columns and issues EXACTLY ONE update & logging event
-    let query = `
-      UPDATE tasks 
-      SET phase = ?, last_edited_by_name = ?, last_edited_by_discord_id = ?, updated_at = datetime('now')
-    `;
-    const params = [phase, actor_name, actor_discord_id];
-
-    query += ` WHERE id = ?`;
-    params.push(taskId);
-
-    db.prepare(query).run(...params);
-
-    if (time_spent !== null) {
-      addTimeEntry({
-        taskId,
-        phase: actualFromPhase,
-        minutes: time_spent,
-        note: time_note || `Tempo registrado ao mover para ${phase}`,
-        source: 'phase_move',
-        actorName: actor_name,
-        actorDiscordId: actor_discord_id
-      });
-    }
-    
-    const updatedTask = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
-      
-    db.prepare(`
-      INSERT INTO activity_log (task_id, action, phase, from_phase, to_phase, actor_name, actor_discord_id)
-      VALUES (?, 'moved', ?, ?, ?, ?, ?)
-    `).run(taskId, phase, actualFromPhase, phase, actor_name, actor_discord_id);
-
-    // --- Webhook for Critical Review ---
-    if (phase === 'revisao' && actualFromPhase !== 'revisao') {
-      try {
-        const taskLabels = db.prepare(`
-          SELECT l.name FROM labels l
-          JOIN task_labels tl ON tl.label_id = l.id
-          WHERE tl.task_id = ?
-        `).all(taskId);
-
-        const isCritical = taskLabels.some(l =>
-          l.name.toLowerCase().includes('estratégica') ||
-          l.name.toLowerCase().includes('estrategica') ||
-          l.name.toLowerCase().includes('urgente') ||
-          l.name.toLowerCase().includes('bug') ||
-          l.name.toLowerCase().includes('crítica') ||
-          l.name.toLowerCase().includes('critica') ||
-          l.name.toLowerCase().includes('feature')
-        );
-
-        if (isCritical) {
-          triggerCriticalReviewWebhook({
-              taskId: taskId,
-              title: updatedTask.title,
-              actor_name: actor_name,
-              assignee_discord_id: updatedTask.assignee_discord_id,
-              labels: taskLabels
-            });
-        }
-      } catch(e) { console.error('Error in webhook logic (phase route):', e); }
-    }
-
-    triggerWebhook('task_phase_changed', formatTask(updatedTask), { name: actor_name, discordId: actor_discord_id });
-    broadcastBoardUpdate(taskId, 'moved');
-    return res.json(formatTask(updatedTask));
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
-  }
-});
-
-// 5. PATCH /api/tasks/:id/assign (Assignee shortcut endpoint)
-router.patch('/api/tasks/:id/assign', requireAuthOrApiKey, (req, res) => {
-  try {
-    const { assignee_discord_id, assignee_name, assignee_email, actor_name = null, actor_discord_id = null } = req.body;
-    const taskId = req.params.id;
-    
-    if (!assignee_name) {
-      return res.status(400).json({ error: 'Assignee name is required.' });
-    }
-    
-    const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
-    if (!task) {
-      return res.status(404).json({ error: 'Task not found.' });
-    }
-    
-    const finalActorName = actor_name || assignee_name || 'System';
-    const finalActorDiscordId = actor_discord_id || assignee_discord_id || null;
-
-    db.prepare(`
-      UPDATE tasks 
-      SET assignee_discord_id = ?, assignee_name = ?, assignee_email = ?, 
-          last_edited_by_name = ?, last_edited_by_discord_id = ?, updated_at = datetime('now')
-      WHERE id = ?
-    `).run(assignee_discord_id || null, assignee_name, assignee_email || null, finalActorName, finalActorDiscordId, taskId);
-    
-    const updatedTask = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
-    
-    db.prepare(`
-      INSERT INTO activity_log (task_id, action, phase, to_phase, actor_name, actor_discord_id)
-      VALUES (?, 'assigned', ?, ?, ?, ?)
-    `).run(taskId, task.phase, assignee_name, finalActorName, finalActorDiscordId);
-
-    triggerWebhook('task_assigned', formatTask(updatedTask));
-    broadcastBoardUpdate(taskId, 'assigned');
-    return res.json(formatTask(updatedTask));
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
-  }
-});
-
-// 6. DELETE /api/tasks/:id/assign (Remove assignee shortcut endpoint)
-router.delete('/api/tasks/:id/assign', requireAuthOrApiKey, (req, res) => {
-  try {
-    const taskId = req.params.id;
-    const { actor_name = 'System', actor_discord_id = null } = req.body || {};
-    
-    const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
-    if (!task) {
-      return res.status(404).json({ error: 'Task not found.' });
-    }
-    
-    const oldAssigneeName = task.assignee_name;
-    const oldAssigneeDiscordId = task.assignee_discord_id;
-    
-    db.prepare(`
-      UPDATE tasks 
-      SET assignee_discord_id = NULL, assignee_name = NULL, assignee_email = NULL,
-          last_edited_by_name = ?, last_edited_by_discord_id = ?, updated_at = datetime('now')
-      WHERE id = ?
-    `).run(actor_name, actor_discord_id, taskId);
-    
-    const updatedTask = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
-    
-    db.prepare(`
-      INSERT INTO activity_log (task_id, action, phase, from_phase, actor_name, actor_discord_id)
-      VALUES (?, 'unassigned', ?, ?, ?, ?)
-    `).run(taskId, task.phase, oldAssigneeName, actor_name, actor_discord_id);
-
-    triggerWebhook('task_unassigned', formatTask(updatedTask));
-    broadcastBoardUpdate(taskId, 'unassigned');
-    return res.json(formatTask(updatedTask));
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
-  }
-});
-
-// 6b. PATCH /api/tasks/:id/thread
-router.patch('/api/tasks/:id/thread', requireAuthOrApiKey, (req, res) => {
-  try {
-    const taskId = req.params.id;
-    const { discord_thread_id } = req.body;
-    
-    const task = db.prepare('SELECT id FROM tasks WHERE id = ?').get(taskId);
-    if (!task) return res.status(404).json({ error: 'Task not found.' });
-
-    db.prepare('UPDATE tasks SET discord_thread_id = ? WHERE id = ?').run(discord_thread_id, taskId);
-    
-    return res.json({ success: true, discord_thread_id });
-  } catch (error) {
-    logger.error('Error updating thread ID:', error);
-    return res.status(500).json({ error: error.message });
-  }
-});
-
-// 7. PATCH /api/tasks/:id (Dynamic Save on Close & Detailed Edit Endpoint)
-router.patch('/api/tasks/:id', requireAuthOrApiKey, (req, res) => {
-  try {
-    const taskId = req.params.id;
-    const { 
-      title, 
-      description, 
-      assignee_discord_id, 
-      time_spent, 
-      time_spent_delta,
-      time_note = '',
-      due_date,
-      phase, 
-      labels, // Array of label IDs
-      actor_name = 'System', 
-      actor_discord_id = null,
-      dynamic_fields // Object with key-value pairs from dynamic forms
-    } = req.body;
-
-    const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
-    if (!task) {
-      return res.status(404).json({ error: 'Task not found.' });
-    }
-
-    const isAdmin = isAdminRequest(req);
-    const criticalChangesRequested =
-      (title !== undefined && title.trim() !== task.title) ||
-      (description !== undefined && description !== task.description) ||
-      (due_date !== undefined && due_date !== task.due_date) ||
-      labels !== undefined;
-
-    if (!isAdmin && criticalChangesRequested) {
-      return res.status(403).json({ error: 'Apenas administradores podem alterar titulo, descricao, prazo ou etiquetas.' });
-    }
-
-    // RBAC: Verificações de permissão para usuário comum
-    if (!req.isBot && req.user && req.user.role === 'user') {
-      const isAssignee = task.assignee_discord_id === req.user.id;
-      const isReviewPhase = task.phase === 'revisao' || phase === 'revisao';
-      if (!isAssignee && !isReviewPhase) {
-        return res.status(403).json({ error: 'Você só pode editar tarefas atribuídas a você, ou tarefas ligadas à Revisão.' });
-      }
-    }
-
-    const changes = [];
-    const updateFields = [];
-    const params = [];
-
-    // Title change audit
-    if (title !== undefined && title.trim() !== task.title) {
-      updateFields.push('title = ?');
-      params.push(title.trim());
-      changes.push({ type: 'title_changed', prev: task.title, next: title.trim() });
-    }
-
-    // Description change audit
-    if (description !== undefined && description !== task.description) {
-      updateFields.push('description = ?');
-      params.push(description);
-      changes.push({ type: 'description_changed', prev: null, next: null });
-    }
-
-    // Phase change audit
-    if (phase !== undefined && phase !== task.phase) {
-      // Validate phase exists
-      const phaseCheck = db.prepare('SELECT name FROM phases WHERE id = ?').get(phase);
-      if (phaseCheck) {
-        // === PHASE GATE VALIDATION ===
-        const phaseRule = db.prepare('SELECT * FROM phase_rules WHERE board_id = ? AND phase_id = ?').get(task.board_id, phase);
-        if (phaseRule) {
-          // 1. Check: Checklist completa?
-          if (phaseRule.require_checklist_done) {
-            const pendingItems = db.prepare(
-              'SELECT COUNT(*) as count FROM task_checklists WHERE task_id = ? AND is_completed = 0'
-            ).get(taskId).count;
-            if (pendingItems > 0) {
-              return res.status(400).json({
-                error: `Checklist incompleta: ${pendingItems} item(ns) pendente(s). Complete todos os itens antes de mover para ${phaseCheck.name}.`,
-                phase_gate: true,
-                gate_type: 'checklist',
-                pending_count: pendingItems
-              });
-            }
-          }
-          // 2. Check: Responsável obrigatório?
-          if (phaseRule.require_assignee && !task.assignee_discord_id) {
-            return res.status(400).json({
-              error: `É necessário atribuir um responsável antes de mover para ${phaseCheck.name}.`,
-              phase_gate: true,
-              gate_type: 'assignee'
-            });
-          }
-          // 3. Check: Campos obrigatórios preenchidos?
-          let requiredFieldIds = [];
-          try { requiredFieldIds = JSON.parse(phaseRule.required_field_ids || '[]'); } catch(e) {}
-          if (requiredFieldIds.length > 0) {
-            const existingValues = db.prepare(
-              `SELECT field_id, value FROM task_field_values WHERE task_id = ? AND field_id IN (${requiredFieldIds.map(() => '?').join(',')})`
-            ).all(taskId, ...requiredFieldIds);
-            
-            const filledIds = existingValues.filter(v => v.value && v.value.trim() !== '').map(v => v.field_id);
-            const missingIds = requiredFieldIds.filter(id => !filledIds.includes(id));
-            
-            if (missingIds.length > 0) {
-              const missingFields = db.prepare(
-                `SELECT id, name, type, options FROM board_fields WHERE id IN (${missingIds.map(() => '?').join(',')})`
-              ).all(...missingIds);
-              
-              // Check if the request body includes dynamic_fields that fill the missing ones
-              const dynamicFilled = dynamic_fields ? Object.keys(dynamic_fields) : [];
-              const stillMissing = missingFields.filter(f => !dynamicFilled.includes(f.name));
-              
-              if (stillMissing.length > 0) {
-                return res.status(400).json({
-                  error: `Campos obrigatórios não preenchidos para mover para ${phaseCheck.name}.`,
-                  phase_gate: true,
-                  gate_type: 'fields',
-                  missing_fields: stillMissing
-                });
-              } else {
-                // Save the dynamic fields that were provided inline
-                const upsert = db.prepare(`
-                  INSERT INTO task_field_values (task_id, field_id, value)
-                  VALUES (?, ?, ?)
-                  ON CONFLICT(task_id, field_id) DO UPDATE SET value = excluded.value
-                `);
-                for (const field of missingFields) {
-                  const val = dynamic_fields[field.name];
-                  if (val) upsert.run(taskId, field.id, val);
-                }
-              }
-            }
-          }
-        }
-        // === END PHASE GATE ===
-        
-        updateFields.push('phase = ?');
-        params.push(phase);
-        
-        const oldPhaseRow = db.prepare('SELECT name FROM phases WHERE id = ?').get(task.phase);
-        const oldPhaseName = oldPhaseRow ? oldPhaseRow.name : task.phase;
-        changes.push({ type: 'phase_changed', prev: oldPhaseName, next: phaseCheck.name });
-      }
-    }
-
-    if (time_spent !== undefined && parseFloat(time_spent) !== task.time_spent) {
-      if (!isAdmin) {
-        return res.status(403).json({ error: 'Apenas administradores podem ajustar o tempo total. Use registrar tempo para somar novas horas.' });
-      }
-      const parsedTime = parseFloat(time_spent) || 0;
-      updateFields.push('time_spent = ?');
-      params.push(parsedTime);
-      changes.push({ type: 'time_adjusted', prev: String(task.time_spent || 0), next: String(parsedTime) });
-    }
-
-    if (due_date !== undefined && due_date !== task.due_date) {
-      updateFields.push('due_date = ?');
-      params.push(due_date || null);
-    }
-
-    // Assignee change audit
-    if (assignee_discord_id !== undefined && assignee_discord_id !== task.assignee_discord_id) {
-      if (!assignee_discord_id) {
-        // Clear assignment
-        updateFields.push('assignee_discord_id = NULL', 'assignee_name = NULL', 'assignee_email = NULL');
-        changes.push({ type: 'unassigned', prev: task.assignee_name || 'Sem atribuição', next: null });
+    if (assignee_discord_id) {
+      const u = await db.oneOrNone('SELECT * FROM discord_users WHERE id = $1', [assignee_discord_id]);
+      if (u) {
+        assignee_name = u.display_name;
       } else {
-        // Fetch matching mapped Discord user from DB
-        const discUser = db.prepare('SELECT * FROM discord_users WHERE id = ?').get(assignee_discord_id);
-        if (discUser) {
-          updateFields.push('assignee_discord_id = ?', 'assignee_name = ?', 'assignee_email = ?');
-          params.push(discUser.id, discUser.display_name, `${discUser.username}@discord.com`);
-          
-          const oldAssignee = task.assignee_name || 'Sem atribuição';
-          changes.push({ type: 'assigned', prev: oldAssignee, next: discUser.display_name });
+        const adminUsers = process.env.ADMIN_USERS ? process.env.ADMIN_USERS.split(',').map(s=>s.trim().toLowerCase()) : [];
+        if (adminUsers.includes(assignee_discord_id.toLowerCase())) {
+          assignee_name = 'Admin';
         }
       }
     }
 
-    // Handle tags/labels updates
-    let labelsChanged = false;
-    if (labels !== undefined && Array.isArray(labels)) {
-      // Get existing label IDs linked to this task
-      const currentLabels = db.prepare('SELECT label_id FROM task_labels WHERE task_id = ?').all(taskId).map(l => l.label_id);
-      
-      const newLabelIds = labels.map(id => parseInt(id, 10));
-      
-      const added = newLabelIds.filter(id => !currentLabels.includes(id));
-      const removed = currentLabels.filter(id => !newLabelIds.includes(id));
+    const { name: actorName, discordId: actorDiscordId } = actorFromRequest(req, req.body);
 
-      if (added.length > 0 || removed.length > 0) {
-        labelsChanged = true;
-        // Delete removed links
-        for (const id of removed) {
-          db.prepare('DELETE FROM task_labels WHERE task_id = ? AND label_id = ?').run(taskId, id);
+    const targetPhase = phase || 'todo';
+    const targetBoardId = board_id ? parseInt(board_id) : 1;
+
+    const newTask = await db.tx(async t => {
+      const task = await t.one(`
+        INSERT INTO tasks (title, phase, board_id, assignee_discord_id, assignee_name, assignee_email, last_edited_by_name, last_edited_by_discord_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING *
+      `, [title, targetPhase, targetBoardId, assignee_discord_id || null, assignee_name, assignee_email, actorName, actorDiscordId]);
+
+      if (labels && Array.isArray(labels)) {
+        for (const labelId of labels) {
+          await t.none('INSERT INTO task_labels (task_id, label_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [task.id, parseInt(labelId)]);
         }
-        // Insert new links
-        for (const id of added) {
-          db.prepare('INSERT OR IGNORE INTO task_labels (task_id, label_id) VALUES (?, ?)').run(taskId, id);
-        }
-        changes.push({ type: 'labels_changed', prev: null, next: null });
-      }
-    }
-
-    // If anything changed, save the database updates in a single execution block
-    if (updateFields.length > 0 || labelsChanged) {
-      updateFields.push('last_edited_by_name = ?', 'last_edited_by_discord_id = ?', "updated_at = datetime('now')");
-      params.push(actor_name, actor_discord_id);
-
-      if (updateFields.length > 3) { // more than just editor fields
-        const query = `UPDATE tasks SET ${updateFields.join(', ')} WHERE id = ?`;
-        params.push(taskId);
-        db.prepare(query).run(...params);
       }
 
-      // --- Webhook for Critical Review ---
-      if (phase === 'revisao' && task.phase !== 'revisao') {
-        try {
-          const taskLabels = db.prepare(`
-            SELECT l.name FROM labels l
-            JOIN task_labels tl ON tl.label_id = l.id
-            WHERE tl.task_id = ?
-          `).all(taskId);
-          
-          const isCritical = taskLabels.some(l => 
-            l.name.toLowerCase().includes('estratégica') || 
-            l.name.toLowerCase().includes('estrategica') || 
-            l.name.toLowerCase().includes('urgente') || 
-            l.name.toLowerCase().includes('bug') || 
-            l.name.toLowerCase().includes('crítica') ||
-            l.name.toLowerCase().includes('critica')
-          );
+      await t.none(`
+        INSERT INTO activity_logs (task_id, action, phase, actor_name, actor_discord_id)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [task.id, 'created', targetPhase, actorName, actorDiscordId]);
 
-          if (isCritical) {
-            triggerCriticalReviewWebhook({
-                taskId: taskId,
-                title: title || task.title,
-                actor_name: actor_name,
-                assignee_discord_id: assignee_discord_id || task.assignee_discord_id,
-                labels: taskLabels
-              });
-          }
-        } catch(e) { console.error('Error in webhook logic:', e); }
-      }
+      return task;
+    });
 
-      // Record activity logs
-      const insertAct = db.prepare(`
-        INSERT INTO activity_log (task_id, action, from_phase, to_phase, actor_name, actor_discord_id)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `);
-      for (const change of changes) {
-        insertAct.run(
-          taskId,
-          change.type,
-          change.prev ? String(change.prev) : null,
-          change.next ? String(change.next) : null,
-          actor_name,
-          actor_discord_id
-        );
-      }
-      
-      // Save dynamic fields as a structured comment
-      if (dynamic_fields && typeof dynamic_fields === 'object' && Object.keys(dynamic_fields).length > 0) {
-        const fieldsText = Object.entries(dynamic_fields)
-          .map(([key, val]) => `**${key}**: ${val}`)
-          .join('\n');
-        
-        const commentText = `📝 **Formulário Preenchido na Mudança de Fase:**\n${fieldsText}`;
-        
-        db.prepare(`
-          INSERT INTO comments (task_id, author_name, author_discord_id, text)
-          VALUES (?, ?, ?, ?)
-        `).run(taskId, actor_name, actor_discord_id, commentText);
-      }
+    const formatted = await formatTask(newTask);
+    broadcastBoardUpdate(newTask.id, 'created');
+    triggerWebhook('task_created', formatted, { name: actorName, discord_id: actorDiscordId });
 
-      broadcastBoardUpdate(taskId, 'edited');
-    }
-
-    if (time_spent_delta !== undefined && parseFloat(time_spent_delta) > 0) {
-      addTimeEntry({
-        taskId,
-        phase: task.phase,
-        minutes: time_spent_delta,
-        note: time_note,
-        source: 'task_update',
-        actorName: actor_name,
-        actorDiscordId: actor_discord_id
-      });
-      broadcastBoardUpdate(taskId, 'time_logged');
-    }
-
-    const updatedTask = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
-    return res.json(formatTask(updatedTask));
+    return res.status(201).json(formatted);
   } catch (error) {
     return res.status(500).json({ error: error.message });
   }
 });
 
-// 8. POST /api/tasks/:id/comments (Requires Auth or API Key)
-router.post('/api/tasks/:id/comments', requireAuthOrApiKey, (req, res) => {
+router.patch('/api/tasks/:id/phase', async (req, res) => {
   try {
-    const { text, author_name, author_discord_id } = req.body;
-    const taskId = req.params.id;
-    
-    if (!text || !author_name) {
-      return res.status(400).json({ error: 'Comment text and author_name are required.' });
-    }
-    
-    const task = db.prepare('SELECT id, phase FROM tasks WHERE id = ?').get(taskId);
-    if (!task) {
-      return res.status(404).json({ error: 'Task not found.' });
-    }
-    
-    const info = db.prepare(`
-      INSERT INTO comments (task_id, author_name, author_discord_id, text)
-      VALUES (?, ?, ?, ?)
-    `).run(taskId, author_name, author_discord_id || null, text);
-    
-    // Commenting acts as an update to the task
-    db.prepare(`
-      UPDATE tasks
-      SET last_edited_by_name = ?, last_edited_by_discord_id = ?, updated_at = datetime('now')
-      WHERE id = ?
-    `).run(author_name, author_discord_id || null, taskId);
+    const { phase } = req.body;
+    if (!phase) return res.status(400).json({ error: 'phase is required' });
 
-    db.prepare(`
-      INSERT INTO activity_log (task_id, action, phase, to_phase, actor_name, actor_discord_id)
-      VALUES (?, 'commented', ?, ?, ?, ?)
-    `).run(taskId, 'commented', task.phase, text, author_name, author_discord_id || null);
+    const db = await getDb();
+    const task = await getTaskOrNull(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
 
-    const comment = db.prepare('SELECT * FROM comments WHERE id = ?').get(info.lastInsertRowid);
-    
-    const fullTaskForWebhook = getTaskOrNull(taskId);
-    if (fullTaskForWebhook) {
-      triggerWebhook('task_commented', { task: formatTask(fullTaskForWebhook), comment });
+    const oldPhase = task.phase;
+    if (oldPhase === phase) return res.json({ success: true, task: await formatTask(task) });
+
+    // Validate phase rules
+    const rule = await db.oneOrNone('SELECT * FROM phase_rules WHERE board_id = $1 AND phase_id = $2', [task.board_id, phase]);
+
+    if (rule) {
+      if (rule.require_assignee && !task.assignee_discord_id) {
+        return res.status(400).json({ error: `Phase ${phase} requires an assignee.` });
+      }
+      if (rule.require_checklist_done) {
+        const row = await db.one('SELECT COUNT(*) FROM task_checklists WHERE task_id = $1 AND is_completed = false', [task.id]);
+        if (parseInt(row.count) > 0) {
+          return res.status(400).json({ error: `Phase ${phase} requires all checklists to be completed.` });
+        }
+      }
     }
+
+    const { name: actorName, discordId: actorDiscordId } = actorFromRequest(req, req.body);
+
+    const updated = await db.tx(async t => {
+      const u = await t.one(`
+        UPDATE tasks SET phase = $1, last_edited_by_name = $2, last_edited_by_discord_id = $3, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $4
+        RETURNING *
+      `, [phase, actorName, actorDiscordId, task.id]);
+
+      await t.none(`
+        INSERT INTO activity_logs (task_id, action, phase, from_phase, to_phase, actor_name, actor_discord_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `, [task.id, 'moved', oldPhase, oldPhase, phase, actorName, actorDiscordId]);
+      
+      return u;
+    });
+
+    const formatted = await formatTask(updated);
+    broadcastBoardUpdate(task.id, 'moved');
+    triggerWebhook('task_phase_changed', formatted, { name: actorName, discord_id: actorDiscordId });
+
+    if (phase === 'revisao') {
+      triggerCriticalReviewWebhook({
+        taskId: task.id,
+        title: task.title,
+        from_phase: oldPhase,
+        to_phase: phase,
+        actor_name: actorName,
+        actor_discord_id: actorDiscordId,
+        labels: formatted.labels.map(l => l.name)
+      });
+    }
+
+    return res.json({ success: true, task: formatted });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+router.patch('/api/tasks/:id/assign', async (req, res) => {
+  try {
+    const { assignee_discord_id } = req.body;
+    const task = await getTaskOrNull(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+
+    const db = await getDb();
+    let assigneeName = null;
+    let assigneeEmail = null;
+    if (assignee_discord_id) {
+      const u = await db.oneOrNone('SELECT * FROM discord_users WHERE id = $1', [assignee_discord_id]);
+      if (u) assigneeName = u.display_name;
+    }
+
+    const { name: actorName, discordId: actorDiscordId } = actorFromRequest(req, req.body);
+
+    const updated = await db.tx(async t => {
+      const u = await t.one(`
+        UPDATE tasks SET assignee_discord_id = $1, assignee_name = $2, assignee_email = $3, last_edited_by_name = $4, last_edited_by_discord_id = $5, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $6
+        RETURNING *
+      `, [assignee_discord_id || null, assigneeName, assigneeEmail, actorName, actorDiscordId, task.id]);
+
+      await t.none(`
+        INSERT INTO activity_logs (task_id, action, phase, actor_name, actor_discord_id)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [task.id, 'assigned', task.phase, actorName, actorDiscordId]);
+      
+      return u;
+    });
+
+    const formatted = await formatTask(updated);
+    broadcastBoardUpdate(task.id, 'edited');
+    triggerWebhook('task_assigned', formatted, { name: actorName, discord_id: actorDiscordId });
+
+    return res.json({ success: true, task: formatted });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+router.patch('/api/tasks/:id/thread', async (req, res) => {
+  try {
+    const { discord_thread_id } = req.body;
+    const task = await getTaskOrNull(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+
+    const db = await getDb();
+    const updated = await db.one(`
+      UPDATE tasks SET discord_thread_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *
+    `, [discord_thread_id || null, task.id]);
+
+    const formatted = await formatTask(updated);
+    broadcastBoardUpdate(task.id, 'edited');
+
+    return res.json({ success: true, task: formatted });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+router.put('/api/tasks/:id/labels', async (req, res) => {
+  try {
+    const { labels } = req.body;
+    if (!Array.isArray(labels)) return res.status(400).json({ error: 'labels must be an array' });
+
+    const task = await getTaskOrNull(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+
+    const { name: actorName, discordId: actorDiscordId } = actorFromRequest(req, req.body);
+    const db = await getDb();
+
+    await db.tx(async tx => {
+      await tx.none('DELETE FROM task_labels WHERE task_id = $1', [task.id]);
+      if (labels.length > 0) {
+        for (const l of labels) {
+          await tx.none('INSERT INTO task_labels (task_id, label_id) VALUES ($1, $2)', [task.id, parseInt(l)]);
+        }
+      }
+      await tx.none(`
+        UPDATE tasks SET last_edited_by_name = $1, last_edited_by_discord_id = $2, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $3
+      `, [actorName, actorDiscordId, task.id]);
+      
+      await tx.none(`
+        INSERT INTO activity_logs (task_id, action, phase, actor_name, actor_discord_id)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [task.id, 'labels_updated', task.phase, actorName, actorDiscordId]);
+    });
+
+    const formatted = await formatTask(await getTaskOrNull(task.id));
+    broadcastBoardUpdate(task.id, 'edited');
+
+    return res.json({ success: true, task: formatted });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+router.delete('/api/tasks/:id', async (req, res) => {
+  try {
+    const task = await getTaskOrNull(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+
+    const db = await getDb();
+    await db.none('DELETE FROM tasks WHERE id = $1', [task.id]);
+    broadcastBoardUpdate(task.id, 'deleted');
+
+    return res.json({ success: true });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+// ==========================================
+// 6. TASKS (Dynamic Save)
+// ==========================================
+
+router.put('/api/tasks/:id', async (req, res) => {
+  try {
+    const task = await getTaskOrNull(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+
+    const { title, description, phase, assignee_discord_id, labels, due_date, fields } = req.body;
+    const { name: actorName, discordId: actorDiscordId } = actorFromRequest(req, req.body);
+    const db = await getDb();
+
+    let assigneeName = task.assignee_name;
+    let actualAssigneeId = task.assignee_discord_id;
+    if (assignee_discord_id !== undefined) {
+      actualAssigneeId = assignee_discord_id || null;
+      if (assignee_discord_id) {
+        const u = await db.oneOrNone('SELECT * FROM discord_users WHERE id = $1', [assignee_discord_id]);
+        assigneeName = u ? u.display_name : null;
+      } else {
+        assigneeName = null;
+      }
+    }
+
+    let actualPhase = task.phase;
+    if (phase !== undefined && phase !== task.phase) {
+      const rule = await db.oneOrNone('SELECT * FROM phase_rules WHERE board_id = $1 AND phase_id = $2', [task.board_id, phase]);
+      if (rule) {
+        if (rule.require_assignee && !actualAssigneeId) {
+          return res.status(400).json({ error: `Phase ${phase} requires an assignee.` });
+        }
+        if (rule.require_checklist_done) {
+          const row = await db.one('SELECT COUNT(*) FROM task_checklists WHERE task_id = $1 AND is_completed = false', [task.id]);
+          if (parseInt(row.count) > 0) {
+            return res.status(400).json({ error: `Phase ${phase} requires checklists to be completed.` });
+          }
+        }
+      }
+      actualPhase = phase;
+    }
+
+    await db.tx(async tx => {
+      // Dynamic update mapping
+      const updates = [];
+      const values = [];
+      let i = 1;
+      
+      updates.push(`last_edited_by_name = $${i++}`);
+      values.push(actorName);
+      updates.push(`last_edited_by_discord_id = $${i++}`);
+      values.push(actorDiscordId);
+      updates.push(`updated_at = CURRENT_TIMESTAMP`);
+      
+      if (title !== undefined) { updates.push(`title = $${i++}`); values.push(title); }
+      if (description !== undefined) { updates.push(`description = $${i++}`); values.push(description); }
+      if (due_date !== undefined) { updates.push(`due_date = $${i++}`); values.push(due_date); }
+      if (assignee_discord_id !== undefined) { 
+        updates.push(`assignee_discord_id = $${i++}`); values.push(actualAssigneeId); 
+        updates.push(`assignee_name = $${i++}`); values.push(assigneeName);
+      }
+      if (phase !== undefined) { updates.push(`phase = $${i++}`); values.push(actualPhase); }
+
+      values.push(task.id);
+      await tx.none(`UPDATE tasks SET ${updates.join(', ')} WHERE id = $${i}`, values);
+
+      if (labels && Array.isArray(labels)) {
+        await tx.none('DELETE FROM task_labels WHERE task_id = $1', [task.id]);
+        for (const l of labels) {
+          await tx.none('INSERT INTO task_labels (task_id, label_id) VALUES ($1, $2)', [task.id, parseInt(l)]);
+        }
+      }
+
+      if (fields && Array.isArray(fields)) {
+        for (const f of fields) {
+          if (f.id && f.value !== undefined) {
+            await tx.none(`
+              INSERT INTO task_field_values (task_id, field_id, value)
+              VALUES ($1, $2, $3)
+              ON CONFLICT (task_id, field_id) DO UPDATE SET value = EXCLUDED.value
+            `, [task.id, parseInt(f.id), String(f.value)]);
+          }
+        }
+      }
+
+      await tx.none(`
+        INSERT INTO activity_logs (task_id, action, phase, actor_name, actor_discord_id)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [task.id, 'edited', actualPhase, actorName, actorDiscordId]);
+    });
+
+    const formatted = await formatTask(await getTaskOrNull(task.id));
+    broadcastBoardUpdate(task.id, 'edited');
     
-    broadcastBoardUpdate(taskId, 'commented');
+    if (actualPhase !== task.phase) {
+       triggerWebhook('task_phase_changed', formatted, { name: actorName, discord_id: actorDiscordId });
+    }
+
+    return res.json({ success: true, task: formatted });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+// ==========================================
+// 8. COMMENTS
+// ==========================================
+
+router.post('/api/tasks/:id/comments', async (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text) return res.status(400).json({ error: 'text is required' });
+
+    const task = await getTaskOrNull(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+
+    const { name: actorName, discordId: actorDiscordId } = actorFromRequest(req, req.body);
+    const db = await getDb();
+
+    const comment = await db.one(`
+      INSERT INTO comments (task_id, text, author_name, author_discord_id)
+      VALUES ($1, $2, $3, $4)
+      RETURNING *
+    `, [task.id, text, actorName, actorDiscordId]);
+
+    await db.none(`
+      INSERT INTO activity_logs (task_id, action, phase, actor_name, actor_discord_id)
+      VALUES ($1, $2, $3, $4, $5)
+    `, [task.id, 'commented', task.phase, actorName, actorDiscordId]);
+
+    broadcastBoardUpdate(task.id, 'commented');
     return res.status(201).json(comment);
   } catch (error) {
     return res.status(500).json({ error: error.message });
   }
 });
 
-router.get('/api/tasks/:id/time', (req, res) => {
+router.put('/api/tasks/:id/comments/:commentId', async (req, res) => {
   try {
-    const taskId = req.params.id;
-    const task = getTaskOrNull(taskId);
-    if (!task) return res.status(404).json({ error: 'Task not found.' });
+    const { text } = req.body;
+    if (!text) return res.status(400).json({ error: 'text is required' });
 
-    return res.json({
-      totalMinutes: task.time_spent || 0,
-      ...getTimeSummary(taskId)
-    });
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
-  }
-});
+    const db = await getDb();
+    const updated = await db.one(`
+      UPDATE comments SET text = $1, edited_at = CURRENT_TIMESTAMP
+      WHERE id = $2
+      RETURNING *
+    `, [text, parseInt(req.params.commentId)]);
 
-router.post('/api/tasks/:id/time', requireAuthOrApiKey, (req, res) => {
-  try {
-    const taskId = req.params.id;
-    const { minutes, note = '' } = req.body;
-    const task = getTaskOrNull(taskId);
-    if (!task) return res.status(404).json({ error: 'Task not found.' });
-
-    const actor = actorFromRequest(req, req.body);
-    const entry = addTimeEntry({
-      taskId,
-      phase: task.phase,
-      minutes,
-      note,
-      source: 'manual',
-      actorName: actor.name,
-      actorDiscordId: actor.discordId
-    });
-
-    if (!entry) return res.status(400).json({ error: 'Informe um tempo maior que zero.' });
-
-    const updatedTaskForWebhook = getTaskOrNull(taskId);
-    if (updatedTaskForWebhook) {
-      triggerWebhook('task_time_logged', { task: formatTask(updatedTaskForWebhook), entry });
-    }
-
-    broadcastBoardUpdate(taskId, 'time_logged');
-    const updatedTask = getTaskOrNull(taskId);
-    return res.status(201).json({
-      entry,
-      totalMinutes: updatedTask.time_spent || 0,
-      timeSummary: getTimeSummary(taskId)
-    });
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
-  }
-});
-
-router.get('/api/tasks/:id/observations', (req, res) => {
-  try {
-    const taskId = req.params.id;
-    const task = getTaskOrNull(taskId);
-    if (!task) return res.status(404).json({ error: 'Task not found.' });
-
-    const observations = db.prepare(`
-      SELECT *
-      FROM task_observations
-      WHERE task_id = ? AND deleted_at IS NULL
-      ORDER BY created_at DESC, id DESC
-    `).all(taskId);
-
-    return res.json(observations);
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
-  }
-});
-
-router.post('/api/tasks/:id/observations', requireAuthOrApiKey, (req, res) => {
-  try {
-    const taskId = req.params.id;
-    const { text, time_spent_minutes = 0 } = req.body;
-    const task = getTaskOrNull(taskId);
-    if (!task) return res.status(404).json({ error: 'Task not found.' });
-    if (!text || !text.trim()) return res.status(400).json({ error: 'Observation text is required.' });
-
-    const actor = actorFromRequest(req, req.body);
-    const minutes = Math.max(0, parseFloat(time_spent_minutes) || 0);
-
-    const info = db.prepare(`
-      INSERT INTO task_observations (task_id, phase, author_name, author_discord_id, text, time_spent_minutes)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(taskId, task.phase, actor.name, actor.discordId, text.trim(), minutes);
-
-    if (minutes > 0) {
-      const entry = addTimeEntry({
-        taskId,
-        phase: task.phase,
-        minutes,
-        note: text.trim(),
-        source: 'observation',
-        actorName: actor.name,
-        actorDiscordId: actor.discordId
-      });
-      const updatedTaskForWebhook = getTaskOrNull(taskId);
-      if (updatedTaskForWebhook) {
-        triggerWebhook('task_time_logged', { task: formatTask(updatedTaskForWebhook), entry });
-      }
-    }
-
-    addTaskActivity(taskId, 'observation_added', task.phase, null, text.trim(), actor.name, actor.discordId);
-    broadcastBoardUpdate(taskId, 'observation_added');
-
-    const observation = db.prepare('SELECT * FROM task_observations WHERE id = ?').get(info.lastInsertRowid);
-    return res.status(201).json(observation);
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
-  }
-});
-
-router.delete('/api/observations/:id', requireAuthOrApiKey, (req, res) => {
-  try {
-    if (!isAdminRequest(req)) {
-      return res.status(403).json({ error: 'Apenas administradores podem remover observacoes.' });
-    }
-
-    const observation = db.prepare('SELECT * FROM task_observations WHERE id = ?').get(req.params.id);
-    if (!observation) return res.status(404).json({ error: 'Observation not found.' });
-
-    const actor = actorFromRequest(req, req.body || {});
-    db.prepare(`
-      UPDATE task_observations
-      SET deleted_at = datetime('now'), deleted_by_name = ?
-      WHERE id = ?
-    `).run(actor.name, req.params.id);
-
-    addTaskActivity(observation.task_id, 'observation_deleted', observation.phase, observation.text, null, actor.name, actor.discordId);
-    broadcastBoardUpdate(observation.task_id, 'observation_deleted');
-    return res.json({ success: true });
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
-  }
-});
-
-router.post('/api/tasks/:id/ownership/start', requireAuthOrApiKey, (req, res) => {
-  try {
-    const taskId = req.params.id;
-    const task = getTaskOrNull(taskId);
-    if (!task) return res.status(404).json({ error: 'Task not found.' });
-
-    const actor = actorFromRequest(req, req.body);
-    const avatarUrl = req.body.avatar_url || (req.user && req.user.avatarUrl) || null;
-
-    if (task.active_owner_discord_id && task.active_owner_discord_id !== actor.discordId && !isAdminRequest(req)) {
-      return res.status(409).json({ error: `${task.active_owner_name || 'Outro usuario'} ja esta trabalhando nesta task.` });
-    }
-
-    db.prepare(`
-      UPDATE tasks
-      SET active_owner_discord_id = ?,
-          active_owner_name = ?,
-          active_owner_avatar_url = ?,
-          active_owner_started_at = datetime('now'),
-          updated_at = datetime('now')
-      WHERE id = ?
-    `).run(actor.discordId, actor.name, avatarUrl, taskId);
-
-    addTaskActivity(taskId, 'work_started', task.phase, null, null, actor.name, actor.discordId);
-    broadcastBoardUpdate(taskId, 'work_started');
-    return res.json(formatTask(getTaskOrNull(taskId)));
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
-  }
-});
-
-router.delete('/api/tasks/:id/ownership', requireAuthOrApiKey, (req, res) => {
-  try {
-    const taskId = req.params.id;
-    const task = getTaskOrNull(taskId);
-    if (!task) return res.status(404).json({ error: 'Task not found.' });
-
-    const actor = actorFromRequest(req, req.body || {});
-    if (task.active_owner_discord_id && task.active_owner_discord_id !== actor.discordId && !isAdminRequest(req)) {
-      return res.status(403).json({ error: 'Apenas quem iniciou o trabalho ou um admin pode liberar a task.' });
-    }
-
-    db.prepare(`
-      UPDATE tasks
-      SET active_owner_discord_id = NULL,
-          active_owner_name = NULL,
-          active_owner_avatar_url = NULL,
-          active_owner_started_at = NULL,
-          updated_at = datetime('now')
-      WHERE id = ?
-    `).run(taskId);
-
-    addTaskActivity(taskId, 'work_stopped', task.phase, task.active_owner_name, null, actor.name, actor.discordId);
-    broadcastBoardUpdate(taskId, 'work_stopped');
-    return res.json(formatTask(getTaskOrNull(taskId)));
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
-  }
-});
-
-// 9. GET /api/tasks/:id/comments (Public)
-router.get('/api/tasks/:id/comments', (req, res) => {
-  try {
-    const taskId = req.params.id;
-    const comments = db.prepare('SELECT * FROM comments WHERE task_id = ? ORDER BY created_at DESC').all(taskId);
-    
-    return res.json(comments);
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
-  }
-});
-
-// 11.5. GET /api/tasks/:id/activity
-router.get('/api/tasks/:id/activity', (req, res) => {
-  try {
-    const taskId = req.params.id;
-    const activities = db.prepare('SELECT * FROM activity_log WHERE task_id = ? ORDER BY created_at DESC').all(taskId);
-    return res.json(activities);
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
-  }
-});
-
-// 11. DELETE /api/tasks/:id (Requires Auth or API Key)
-router.delete('/api/tasks/:id', requireAuthOrApiKey, (req, res) => {
-  try {
-    if (!req.isBot && req.user && req.user.role === 'user') {
-      return res.status(403).json({ error: 'Apenas administradores ou PMs podem excluir tarefas.' });
-    }
-
-    const taskId = req.params.id;
-
-    const task = db.prepare('SELECT id FROM tasks WHERE id = ?').get(taskId);
-    if (!task) {
-      return res.status(404).json({ error: 'Task not found.' });
-    }
-
-    // CASCADE delete handles: comments, audit_trail, task_labels
-    db.prepare('DELETE FROM tasks WHERE id = ?').run(taskId);
-
-    broadcastBoardUpdate(taskId, 'deleted');
-    return res.json({ success: true, message: `Task ${taskId} deleted.` });
-  } catch (error) {
-    return res.status(500).json({ error: error.message });
-  }
-});
-
-// 12. PATCH /api/comments/:id (Edit or Pin)
-router.patch('/api/comments/:id', requireAuthOrApiKey, (req, res) => {
-  try {
-    if (!req.isBot && req.user && req.user.role === 'user') {
-      return res.status(403).json({ error: 'Apenas administradores podem editar/fixar comentários.' });
-    }
-
-    const commentId = req.params.id;
-    const { text, is_pinned, actor_name = 'Admin', actor_discord_id = null } = req.body;
-
-    const comment = db.prepare('SELECT * FROM comments WHERE id = ?').get(commentId);
-    if (!comment) return res.status(404).json({ error: 'Comentário não encontrado.' });
-
-    let query = "UPDATE comments SET edited_at = datetime('now')";
-    const params = [];
-
-    if (text !== undefined) {
-      query += ', text = ?';
-      params.push(text);
-    }
-    if (is_pinned !== undefined) {
-      query += ', is_pinned = ?';
-      params.push(is_pinned ? 1 : 0);
-    }
-
-    query += ' WHERE id = ?';
-    params.push(commentId);
-
-    db.prepare(query).run(...params);
-    broadcastBoardUpdate(comment.task_id, 'comment_edited');
-
-    const updated = db.prepare('SELECT * FROM comments WHERE id = ?').get(commentId);
+    broadcastBoardUpdate(req.params.id, 'comment_edited');
     return res.json(updated);
   } catch (error) {
-    console.error('Error updating comment:', error);
     return res.status(500).json({ error: error.message });
   }
 });
 
-// 13. DELETE /api/comments/:id (Soft Delete)
-router.delete('/api/comments/:id', requireAuthOrApiKey, (req, res) => {
+router.delete('/api/tasks/:id/comments/:commentId', async (req, res) => {
   try {
-    if (!req.isBot && req.user && req.user.role === 'user') {
-      return res.status(403).json({ error: 'Apenas administradores podem excluir comentários.' });
-    }
+    const { name: actorName } = actorFromRequest(req, req.body);
+    const db = await getDb();
 
-    const commentId = req.params.id;
-    const { actor_name = 'Admin', actor_discord_id = null } = req.body || {};
+    await db.none(`
+      UPDATE comments SET deleted_at = CURRENT_TIMESTAMP, deleted_by_name = $1
+      WHERE id = $2
+    `, [actorName, parseInt(req.params.commentId)]);
 
-    const comment = db.prepare('SELECT * FROM comments WHERE id = ?').get(commentId);
-    if (!comment) return res.status(404).json({ error: 'Comentário não encontrado.' });
+    broadcastBoardUpdate(req.params.id, 'comment_deleted');
+    return res.json({ success: true });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
 
-    db.prepare(`
-      UPDATE comments 
-      SET deleted_at = datetime('now'), deleted_by_name = ?
-      WHERE id = ?
-    `).run(actor_name, commentId);
+router.patch('/api/tasks/:id/comments/:commentId/pin', async (req, res) => {
+  try {
+    const { isPinned } = req.body;
+    const db = await getDb();
+    const updated = await db.one(`
+      UPDATE comments SET is_pinned = $1 WHERE id = $2 RETURNING *
+    `, [!!isPinned, parseInt(req.params.commentId)]);
 
-    broadcastBoardUpdate(comment.task_id, 'comment_deleted');
+    broadcastBoardUpdate(req.params.id, 'comment_pinned');
+    return res.json(updated);
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
 
+// ==========================================
+// 10. TIME
+// ==========================================
+
+router.post('/api/tasks/:id/time', async (req, res) => {
+  try {
+    const { minutes, note, phase, source } = req.body;
+    const task = await getTaskOrNull(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+
+    const { name: actorName, discordId: actorDiscordId } = actorFromRequest(req, req.body);
+
+    const entry = await addTimeEntry({
+      taskId: task.id,
+      phase: phase || task.phase,
+      minutes,
+      note,
+      source,
+      actorName,
+      actorDiscordId
+    });
+
+    broadcastBoardUpdate(task.id, 'time_logged');
+    return res.status(201).json(entry || { success: true, ignored: true });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+// ==========================================
+// 11. OBSERVATIONS
+// ==========================================
+
+router.post('/api/tasks/:id/observations', async (req, res) => {
+  try {
+    const { text, time_spent_minutes, phase } = req.body;
+    if (!text) return res.status(400).json({ error: 'text is required' });
+
+    const task = await getTaskOrNull(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+
+    const { name: actorName, discordId: actorDiscordId } = actorFromRequest(req, req.body);
+    const db = await getDb();
+    
+    await db.tx(async tx => {
+      const timeMins = parseFloat(time_spent_minutes) || 0;
+      const obsPhase = phase || task.phase;
+
+      const obs = await tx.one(`
+        INSERT INTO task_observations (task_id, text, phase, time_spent_minutes, author_name, author_discord_id)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING *
+      `, [task.id, text, obsPhase, timeMins, actorName, actorDiscordId]);
+
+      if (timeMins > 0) {
+        await tx.none(`
+          INSERT INTO task_time_entries (task_id, phase, minutes, note, source, actor_name, actor_discord_id)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `, [task.id, obsPhase, timeMins, `Auto-logged from observation #${obs.id}`, 'observation', actorName, actorDiscordId]);
+
+        await tx.none('UPDATE tasks SET time_spent = time_spent + $1, last_edited_by_name = $2, last_edited_by_discord_id = $3 WHERE id = $4', 
+          [timeMins, actorName, actorDiscordId, task.id]);
+      }
+
+      await tx.none(`
+        INSERT INTO activity_logs (task_id, action, phase, actor_name, actor_discord_id)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [task.id, 'observation_added', task.phase, actorName, actorDiscordId]);
+    });
+
+    broadcastBoardUpdate(task.id, 'observation_added');
+    return res.status(201).json({ success: true });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+router.delete('/api/tasks/:id/observations/:obsId', async (req, res) => {
+  try {
+    const { name: actorName } = actorFromRequest(req, req.body);
+    const db = await getDb();
+    await db.none(`
+      UPDATE task_observations SET deleted_at = CURRENT_TIMESTAMP, deleted_by_name = $1
+      WHERE id = $2
+    `, [actorName, parseInt(req.params.obsId)]);
+
+    broadcastBoardUpdate(req.params.id, 'observation_deleted');
     return res.json({ success: true });
   } catch (error) {
     return res.status(500).json({ error: error.message });
@@ -1194,426 +708,268 @@ router.delete('/api/comments/:id', requireAuthOrApiKey, (req, res) => {
 });
 
 // ==========================================
-// 🚀 ENDPOINTS DE CHECKLISTS
+// 12. OWNERSHIP (Active Owner)
 // ==========================================
 
-router.post('/api/tasks/:id/checklists', requireAuthOrApiKey, (req, res) => {
+router.post('/api/tasks/:id/take', async (req, res) => {
   try {
-    const { title, description = '', status = 'todo', assignee_name = null, assignee_discord_id = null, time_spent = 0 } = req.body;
-    const taskId = req.params.id;
-    if (!title || !title.trim()) return res.status(400).json({ error: 'Title required.' });
+    const task = await getTaskOrNull(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (task.active_owner_discord_id) return res.status(400).json({ error: 'Task already taken' });
+
+    const { name: actorName, discordId: actorDiscordId } = actorFromRequest(req, req.body);
+    const db = await getDb();
     
-    const actor_name = req.body.actor_name || (req.user ? req.user.name : 'System');
-    const actor_discord_id = req.body.actor_discord_id || (req.user ? req.user.id : null);
-
-    const info = db.prepare(`
-      INSERT INTO task_checklists (task_id, title, description, status, assignee_name, assignee_discord_id, time_spent, position)
-      VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM task_checklists WHERE task_id = ?))
-    `).run(taskId, title.trim(), description, status, assignee_name, assignee_discord_id, time_spent, taskId);
+    const u = await db.oneOrNone('SELECT * FROM discord_users WHERE id = $1', [actorDiscordId || '']);
     
-    const clId = info.lastInsertRowid;
+    await db.tx(async tx => {
+      await tx.none(`
+        UPDATE tasks SET active_owner_discord_id = $1, active_owner_name = $2, active_owner_avatar_url = $3, active_owner_started_at = CURRENT_TIMESTAMP
+        WHERE id = $4
+      `, [actorDiscordId, actorName, u ? u.avatar_url : null, task.id]);
 
-    // Log checklist creation
-    db.prepare(`
-      INSERT INTO checklist_activity (checklist_id, task_id, action, to_value, actor_name, actor_discord_id)
-      VALUES (?, ?, 'created', ?, ?, ?)
-    `).run(clId, taskId, title.trim(), actor_name, actor_discord_id);
+      await tx.none(`
+        INSERT INTO activity_logs (task_id, action, phase, actor_name, actor_discord_id)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [task.id, 'taken', task.phase, actorName, actorDiscordId]);
+    });
 
-    broadcastBoardUpdate(taskId, 'checklist_added');
-    return res.status(201).json({ id: clId, task_id: taskId, title: title.trim(), description, status, assignee_name, assignee_discord_id, time_spent, is_completed: 0 });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
+    broadcastBoardUpdate(task.id, 'taken');
+    return res.json({ success: true });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
   }
 });
 
-router.patch('/api/checklists/:id', requireAuthOrApiKey, (req, res) => {
+router.post('/api/tasks/:id/release', async (req, res) => {
   try {
-    const { title, description, status, assignee_name, assignee_discord_id, time_spent, time_spent_delta, is_completed } = req.body;
-    const clId = req.params.id;
+    const { minutes, note, phase } = req.body;
+    const task = await getTaskOrNull(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!task.active_owner_discord_id) return res.json({ success: true });
+
+    const { name: actorName, discordId: actorDiscordId } = actorFromRequest(req, req.body);
+    const isSelf = task.active_owner_discord_id === actorDiscordId;
+
+    if (!isSelf && !isAdminRequest(req)) {
+      return res.status(403).json({ error: 'Not authorized to release' });
+    }
+
+    const m = Math.max(0, parseFloat(minutes) || 0);
+    const db = await getDb();
+
+    await db.tx(async tx => {
+      await tx.none(`
+        UPDATE tasks SET active_owner_discord_id = NULL, active_owner_name = NULL, active_owner_avatar_url = NULL, active_owner_started_at = NULL, time_spent = time_spent + $1
+        WHERE id = $2
+      `, [m, task.id]);
+
+      if (m > 0) {
+        await tx.none(`
+          INSERT INTO task_time_entries (task_id, phase, minutes, note, source, actor_name, actor_discord_id)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `, [task.id, phase || task.phase, m, note || '', 'session_release', actorName, actorDiscordId]);
+      }
+
+      await tx.none(`
+        INSERT INTO activity_logs (task_id, action, phase, actor_name, actor_discord_id)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [task.id, isSelf ? 'released' : 'force_released', task.phase, actorName, actorDiscordId]);
+    });
+
+    broadcastBoardUpdate(task.id, 'released');
+    return res.json({ success: true });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+// ==========================================
+// 13. CHECKLISTS
+// ==========================================
+
+router.post('/api/tasks/:id/checklists', async (req, res) => {
+  try {
+    const { title, description } = req.body;
+    if (!title) return res.status(400).json({ error: 'title is required' });
+
+    const task = await getTaskOrNull(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+
+    const { name: actorName, discordId: actorDiscordId } = actorFromRequest(req, req.body);
+    const db = await getDb();
     
-    const actor_name = req.body.actor_name || (req.user ? req.user.name : 'System');
-    const actor_discord_id = req.body.actor_discord_id || (req.user ? req.user.id : null);
+    const row = await db.one('SELECT COALESCE(MAX(position), 0) as max_pos FROM task_checklists WHERE task_id = $1', [task.id]);
+    const position = parseInt(row.max_pos) + 1;
 
-    const cl = db.prepare('SELECT * FROM task_checklists WHERE id = ?').get(clId);
-    if (!cl) return res.status(404).json({ error: 'Checklist item not found.' });
+    const checklist = await db.tx(async tx => {
+      const cl = await tx.one(`
+        INSERT INTO task_checklists (task_id, title, description, position)
+        VALUES ($1, $2, $3, $4)
+        RETURNING *
+      `, [task.id, title, description || '', position]);
 
-    const updates = [];
-    const params = [];
-    const changes = [];
+      await tx.none(`
+        INSERT INTO activity_logs (task_id, action, phase, actor_name, actor_discord_id)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [task.id, 'checklist_created', task.phase, actorName, actorDiscordId]);
+      
+      return cl;
+    });
 
-    if (title !== undefined && title.trim() !== cl.title) {
-      updates.push('title = ?');
-      params.push(title.trim());
-      changes.push({ action: 'title_changed', from: cl.title, to: title.trim() });
-    }
+    broadcastBoardUpdate(task.id, 'checklist_created');
+    return res.status(201).json(checklist);
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
 
-    if (description !== undefined && description !== cl.description) {
-      updates.push('description = ?');
-      params.push(description);
-      changes.push({ action: 'description_changed', from: cl.description, to: description });
-    }
+router.put('/api/tasks/:id/checklists/:checklistId', async (req, res) => {
+  try {
+    const { title, description, status, assignee_discord_id, is_completed } = req.body;
+    const clId = parseInt(req.params.checklistId);
+    
+    const db = await getDb();
+    const oldCl = await db.oneOrNone('SELECT * FROM task_checklists WHERE id = $1', [clId]);
+    if (!oldCl || String(oldCl.task_id) !== String(req.params.id)) return res.status(404).json({ error: 'Checklist not found' });
 
-    let targetStatus = status;
-    if (is_completed !== undefined) {
-      targetStatus = is_completed ? 'done' : 'todo';
-    }
-
-    if (targetStatus !== undefined && targetStatus !== cl.status) {
-      updates.push('status = ?');
-      params.push(targetStatus);
-      changes.push({ action: 'status_changed', from: cl.status, to: targetStatus });
-
-      // Set or clear completion details
-      if (targetStatus === 'done') {
-        updates.push("completed_at = datetime('now')", "completed_by = ?");
-        params.push(actor_name);
-        changes.push({ action: 'completed', from: null, to: actor_name });
+    const task = await getTaskOrNull(req.params.id);
+    const { name: actorName, discordId: actorDiscordId } = actorFromRequest(req, req.body);
+    
+    let assigneeName = oldCl.assignee_name;
+    let actualAssigneeId = oldCl.assignee_discord_id;
+    if (assignee_discord_id !== undefined) {
+      actualAssigneeId = assignee_discord_id || null;
+      if (assignee_discord_id) {
+        const u = await db.oneOrNone('SELECT * FROM discord_users WHERE id = $1', [assignee_discord_id]);
+        assigneeName = u ? u.display_name : null;
       } else {
-        updates.push("completed_at = NULL", "completed_by = NULL");
+        assigneeName = null;
       }
     }
 
-    if (assignee_name !== undefined && assignee_name !== cl.assignee_name) {
-      updates.push('assignee_name = ?, assignee_discord_id = ?');
-      params.push(assignee_name || null, assignee_discord_id || null);
-      changes.push({ action: 'assignee_changed', from: cl.assignee_name, to: assignee_name });
-    }
+    let actualIsCompleted = oldCl.is_completed;
+    let completedAt = oldCl.completed_at;
+    let completedBy = oldCl.completed_by;
+    let actualStatus = status !== undefined ? status : oldCl.status;
 
-    if (time_spent_delta !== undefined && parseFloat(time_spent_delta) > 0) {
-      const delta = parseFloat(time_spent_delta);
-      const newTotal = (cl.time_spent || 0) + delta;
-      updates.push('time_spent = ?');
-      params.push(newTotal);
-      changes.push({ action: 'time_spent_changed', from: String(cl.time_spent || 0), to: String(newTotal) });
-    } else if (time_spent !== undefined && parseFloat(time_spent) !== cl.time_spent) {
-      const t = parseFloat(time_spent) || 0;
-      updates.push('time_spent = ?');
-      params.push(t);
-      changes.push({ action: 'time_spent_changed', from: String(cl.time_spent), to: String(t) });
-    }
-
-    if (updates.length > 0) {
-      updates.push("updated_at = datetime('now')");
-      const query = `UPDATE task_checklists SET ${updates.join(', ')} WHERE id = ?`;
-      params.push(clId);
-      db.prepare(query).run(...params);
-
-      // --- Propagate time delta up to parent task ---
-      const timeDelta = parseFloat(time_spent_delta);
-      if (time_spent_delta !== undefined && timeDelta > 0) {
-        db.prepare(`
-          UPDATE tasks SET time_spent = COALESCE(time_spent, 0) + ?, updated_at = datetime('now') WHERE id = ?
-        `).run(timeDelta, cl.task_id);
-
-        // Log in task activity for the timeline
-        db.prepare(`
-          INSERT INTO activity_log (task_id, action, phase, from_phase, to_phase, actor_name, actor_discord_id)
-          VALUES (?, 'time_logged', ?, ?, ?, ?, ?)
-        `).run(
-          cl.task_id,
-          cl.status,
-          String(cl.time_spent || 0),
-          `Etapa "${cl.title}": +${timeDelta} min`,
-          actor_name,
-          actor_discord_id
-        );
-        const updatedTaskForWebhook = getTaskOrNull(cl.task_id);
-        if (updatedTaskForWebhook) {
-          triggerWebhook('task_time_logged', { 
-            task: formatTask(updatedTaskForWebhook), 
-            entry: { minutes: timeDelta, source: 'checklist', actorName: actor_name, actorDiscordId: actor_discord_id } 
-          });
-        }
-      }
-
-      // Record checklist activities
-      const insertClAct = db.prepare(`
-        INSERT INTO checklist_activity (checklist_id, task_id, action, from_value, to_value, actor_name, actor_discord_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `);
-      for (const change of changes) {
-        insertClAct.run(clId, cl.task_id, change.action, change.from, change.to, actor_name, actor_discord_id);
-      }
-
-      // Also write a general entry to task activity log so it appears in task timeline!
-      const firstChange = changes[0];
-      if (firstChange && time_spent_delta === undefined) {
-        db.prepare(`
-          INSERT INTO activity_log (task_id, action, phase, from_phase, to_phase, actor_name, actor_discord_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).run(cl.task_id, 'checklist_updated', cl.status, firstChange.action, `${cl.title}: ${firstChange.to}`, actor_name, actor_discord_id);
+    if (is_completed !== undefined && is_completed !== oldCl.is_completed) {
+      actualIsCompleted = !!is_completed;
+      if (actualIsCompleted) {
+        completedAt = new Date().toISOString();
+        completedBy = actorName;
+        actualStatus = 'done';
+      } else {
+        completedAt = null;
+        completedBy = null;
+        if (actualStatus === 'done') actualStatus = 'todo';
       }
     }
 
-    broadcastBoardUpdate(cl.task_id, 'checklist_updated');
-    return res.json({ success: true });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
+    const updated = await db.tx(async tx => {
+      // Dynamic update
+      const updates = [];
+      const values = [];
+      let i = 1;
+      
+      updates.push(`updated_at = CURRENT_TIMESTAMP`);
+      updates.push(`assignee_discord_id = $${i++}`); values.push(actualAssigneeId);
+      updates.push(`assignee_name = $${i++}`); values.push(assigneeName);
+      updates.push(`is_completed = $${i++}`); values.push(actualIsCompleted);
+      updates.push(`completed_at = $${i++}`); values.push(completedAt);
+      updates.push(`completed_by = $${i++}`); values.push(completedBy);
+      updates.push(`status = $${i++}`); values.push(actualStatus);
+      
+      if (title !== undefined) { updates.push(`title = $${i++}`); values.push(title); }
+      if (description !== undefined) { updates.push(`description = $${i++}`); values.push(description); }
+      
+      values.push(clId);
+      
+      const u = await tx.one(`
+        UPDATE task_checklists SET ${updates.join(', ')}
+        WHERE id = $${i}
+        RETURNING *
+      `, values);
 
-router.delete('/api/checklists/:id', requireAuthOrApiKey, (req, res) => {
-  try {
-    const clId = req.params.id;
-    const cl = db.prepare('SELECT * FROM task_checklists WHERE id = ?').get(clId);
-    if (!cl) return res.status(404).json({ error: 'Checklist item not found.' });
-
-    const actor_name = req.body.actor_name || (req.user ? req.user.name : 'System');
-    const actor_discord_id = req.body.actor_discord_id || (req.user ? req.user.id : null);
-
-    db.prepare('DELETE FROM task_checklists WHERE id = ?').run(clId);
-
-    // Add general task activity log for checklist deletion
-    db.prepare(`
-      INSERT INTO activity_log (task_id, action, phase, from_phase, actor_name, actor_discord_id)
-      VALUES (?, 'checklist_deleted', ?, ?, ?, ?)
-    `).run(cl.task_id, cl.status, cl.title, actor_name, actor_discord_id);
-
-    broadcastBoardUpdate(cl.task_id, 'checklist_deleted');
-    return res.json({ success: true });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// Checklist item comments
-router.post('/api/checklists/:id/comments', requireAuthOrApiKey, (req, res) => {
-  try {
-    const { text, author_name, author_discord_id } = req.body;
-    const clId = req.params.id;
-    if (!text || !author_name) {
-      return res.status(400).json({ error: 'Text and author_name are required.' });
-    }
-
-    const cl = db.prepare('SELECT * FROM task_checklists WHERE id = ?').get(clId);
-    if (!cl) return res.status(404).json({ error: 'Checklist item not found.' });
-
-    const info = db.prepare(`
-      INSERT INTO checklist_comments (checklist_id, author_name, author_discord_id, text)
-      VALUES (?, ?, ?, ?)
-    `).run(clId, author_name, author_discord_id || null, text);
-
-    // Also log in checklist activity
-    db.prepare(`
-      INSERT INTO checklist_activity (checklist_id, task_id, action, to_value, actor_name, actor_discord_id)
-      VALUES (?, ?, 'commented', ?, ?, ?)
-    `).run(clId, cl.task_id, text, author_name, author_discord_id || null);
-
-    const commentObj = { id: info.lastInsertRowid, checklist_id: clId, author_name, author_discord_id, text };
-    const fullTaskForWebhook = getTaskOrNull(cl.task_id);
-    if (fullTaskForWebhook) {
-      triggerWebhook('task_commented', { task: formatTask(fullTaskForWebhook), comment: commentObj, is_checklist: true });
-    }
-
-    broadcastBoardUpdate(cl.task_id, 'checklist_commented');
-    return res.status(201).json(commentObj);
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-router.get('/api/checklists/:id/comments', (req, res) => {
-  try {
-    const clId = req.params.id;
-    const comments = db.prepare('SELECT * FROM checklist_comments WHERE checklist_id = ? ORDER BY created_at DESC').all(clId);
-    return res.json(comments);
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// ==========================================
-// 🚀 ENDPOINT DE LOGS DA FASE
-// ==========================================
-
-router.get('/api/tasks/:id/activity/by-phase', (req, res) => {
-  try {
-    const taskId = req.params.id;
-    const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
-    if (!task) return res.status(404).json({ error: 'Task not found.' });
-
-    // Fetch phase transition logs (created, moved)
-    const transitions = db.prepare(`
-      SELECT * FROM activity_log 
-      WHERE task_id = ? AND action IN ('created', 'moved')
-      ORDER BY created_at ASC
-    `).all(taskId);
-
-    // Build timeline intervals
-    const intervals = [];
-    const now = new Date();
-
-    if (transitions.length === 0) {
-      intervals.push({
-        phase: task.phase || 'todo',
-        start: new Date(task.created_at + (task.created_at.endsWith('Z') ? '' : 'Z')),
-        end: now
-      });
-    } else {
-      for (let i = 0; i < transitions.length; i++) {
-        const current = transitions[i];
-        const start = new Date(current.created_at + (current.created_at.endsWith('Z') ? '' : 'Z'));
-        const next = transitions[i + 1];
-        const end = next 
-          ? new Date(next.created_at + (next.created_at.endsWith('Z') ? '' : 'Z')) 
-          : now;
+      if (actualIsCompleted && !oldCl.is_completed) {
+        await tx.none(`
+          INSERT INTO checklist_activities (checklist_id, task_id, action, actor_name, actor_discord_id)
+          VALUES ($1, $2, $3, $4, $5)
+        `, [clId, task.id, 'completed', actorName, actorDiscordId]);
         
-        let phase = current.to_phase || current.phase || 'todo';
-        if (current.action === 'created') {
-          phase = current.phase || task.phase || 'todo';
-        }
-        intervals.push({ phase, start, end });
+        await tx.none(`
+          INSERT INTO activity_logs (task_id, action, phase, actor_name, actor_discord_id)
+          VALUES ($1, $2, $3, $4, $5)
+        `, [task.id, 'checklist_completed', task.phase, actorName, actorDiscordId]);
       }
-    }
+      return u;
+    });
 
-    // Sum time spent in each phase
-    const phaseDurations = {};
-    for (const interval of intervals) {
-      const dur = interval.end - interval.start;
-      phaseDurations[interval.phase] = (phaseDurations[interval.phase] || 0) + dur;
-    }
+    broadcastBoardUpdate(task.id, 'checklist_updated');
+    return res.json(updated);
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
 
-    // Fetch all events for the task
-    const activities = db.prepare('SELECT * FROM activity_log WHERE task_id = ?').all(taskId);
-    const comments = db.prepare("SELECT * FROM comments WHERE task_id = ? AND deleted_at IS NULL").all(taskId);
-    const checklistActs = db.prepare(`
-      SELECT ca.*, cl.title as checklist_title
-      FROM checklist_activity ca
-      JOIN task_checklists cl ON ca.checklist_id = cl.id
-      WHERE ca.task_id = ?
-    `).all(taskId);
+router.post('/api/tasks/:id/checklists/:checklistId/comments', async (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text) return res.status(400).json({ error: 'text is required' });
 
-    // Helper to assign phase to timestamp
-    function getPhase(timestamp) {
-      const t = new Date(timestamp + (timestamp.endsWith('Z') ? '' : 'Z'));
-      for (const interval of intervals) {
-        if (t >= interval.start && t <= interval.end) {
-          return interval.phase;
-        }
-      }
-      if (intervals.length > 0) {
-        if (t < intervals[0].start) return intervals[0].phase;
-        return intervals[intervals.length - 1].phase;
-      }
-      return task.phase || 'todo';
-    }
+    const { name: actorName, discordId: actorDiscordId } = actorFromRequest(req, req.body);
+    const db = await getDb();
+    
+    const comment = await db.one(`
+      INSERT INTO checklist_comments (checklist_id, author_name, author_discord_id, text)
+      VALUES ($1, $2, $3, $4)
+      RETURNING *
+    `, [parseInt(req.params.checklistId), actorName, actorDiscordId, text]);
 
-    // Construct a unified timeline event list
-    const events = [];
+    broadcastBoardUpdate(req.params.id, 'checklist_commented');
+    return res.status(201).json(comment);
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
 
-    // Process activity_log
-    for (const act of activities) {
-      events.push({
-        type: act.action,
-        timestamp: act.created_at,
-        actor_name: act.actor_name || 'System',
-        actor_discord_id: act.actor_discord_id,
-        phase: act.phase || getPhase(act.created_at),
-        details: {
-          from_phase: act.from_phase,
-          to_phase: act.to_phase
-        }
-      });
-    }
+router.delete('/api/tasks/:id/checklists/:checklistId', async (req, res) => {
+  try {
+    const db = await getDb();
+    await db.none('DELETE FROM task_checklists WHERE id = $1', [parseInt(req.params.checklistId)]);
+    broadcastBoardUpdate(req.params.id, 'checklist_deleted');
+    return res.json({ success: true });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
 
-    // Process comments
-    for (const comm of comments) {
-      events.push({
-        type: 'commented',
-        timestamp: comm.created_at,
-        actor_name: comm.author_name,
-        actor_discord_id: comm.author_discord_id,
-        phase: getPhase(comm.created_at),
-        details: {
-          text: comm.text
-        }
-      });
-    }
+// ==========================================
+// 14. ACTIVITY LOG & EXPORT
+// ==========================================
 
-    // Process checklist activities
-    for (const cl of checklistActs) {
-      events.push({
-        type: `checklist_${cl.action}`,
-        timestamp: cl.created_at,
-        actor_name: cl.actor_name || 'System',
-        actor_discord_id: cl.actor_discord_id,
-        phase: getPhase(cl.created_at),
-        details: {
-          title: cl.checklist_title,
-          from_value: cl.from_value,
-          to_value: cl.to_value
-        }
-      });
-    }
+router.get('/api/activity', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = parseInt(req.query.offset) || 0;
+    const db = await getDb();
 
-    // Sort events chronologically
-    events.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    // The activity feed usually queries logs with tasks
+    const logs = await db.any(`
+      SELECT a.*, t.title as task_title, t.phase as task_phase 
+      FROM activity_logs a
+      LEFT JOIN tasks t ON t.id = a.task_id
+      ORDER BY a.created_at DESC
+      LIMIT $1 OFFSET $2
+    `, [limit, offset]);
 
-    // Get all column/phase definitions to organize output
-    const phases = db.prepare('SELECT * FROM phases ORDER BY position ASC').all();
-    const phaseNames = {};
-    for (const p of phases) {
-      phaseNames[p.id] = p.name;
-    }
+    // Shape response like Prisma's to avoid breaking frontend blindly
+    const shaped = logs.map(l => ({
+      ...l,
+      task: { title: l.task_title, phase: l.task_phase }
+    }));
 
-    // Group events by phase
-    const grouped = {};
-    for (const p of phases) {
-      grouped[p.id] = {
-        phaseId: p.id,
-        phaseName: p.name,
-        totalTimeMs: phaseDurations[p.id] || 0,
-        events: []
-      };
-    }
-
-    // Ensure we also have a group for any unlisted/deleted phases just in case
-    for (const ev of events) {
-      if (!grouped[ev.phase]) {
-        grouped[ev.phase] = {
-          phaseId: ev.phase,
-          phaseName: phaseNames[ev.phase] || ev.phase,
-          totalTimeMs: phaseDurations[ev.phase] || 0,
-          events: []
-        };
-      }
-      grouped[ev.phase].events.push(ev);
-    }
-
-    // Convert grouped object to array sorted by position of phases
-    const result = [];
-    for (const p of phases) {
-      if (grouped[p.id]) {
-        result.push(grouped[p.id]);
-      }
-    }
-    // Append any extra phases
-    for (const phaseId in grouped) {
-      if (!phases.some(p => p.id === phaseId)) {
-        result.push(grouped[phaseId]);
-      }
-    }
-
-    // Now format each group by users
-    for (const group of result) {
-      const userMap = {};
-      for (const ev of group.events) {
-        const u = ev.actor_name;
-        if (!userMap[u]) {
-          userMap[u] = {
-            name: u,
-            discordId: ev.actor_discord_id,
-            actions: []
-          };
-        }
-        userMap[u].actions.push(ev);
-      }
-      group.users = Object.values(userMap);
-      group.actionCount = group.events.length;
-      delete group.events; // clean up raw list
-    }
-
-    return res.json(result);
+    return res.json(shaped);
   } catch (error) {
     return res.status(500).json({ error: error.message });
   }

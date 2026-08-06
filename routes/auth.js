@@ -1,248 +1,246 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { db } from '../database.js';
-import { authenticateJWT } from '../middleware/auth.js';
-import 'dotenv/config';
+import { getDb } from '../lib/db.js';
 
 const router = Router();
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
 
-function getFrontendRedirectUrl(params = {}) {
-  const fallbackCallback = `http://localhost:${process.env.PORT || 3001}/auth/discord/callback`;
-  const callbackUrl = new URL(process.env.DISCORD_REDIRECT_URI || fallbackCallback);
-  const frontendUrl = new URL('/', callbackUrl.origin);
+// Helper to hash password
+const hashPassword = async (password) => {
+  const salt = await bcrypt.genSalt(10);
+  return bcrypt.hash(password, salt);
+};
 
-  for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined && value !== null) {
-      frontendUrl.searchParams.set(key, value);
+// ==========================================
+// TRADITIONAL AUTHENTICATION (username/password)
+// ==========================================
+
+router.post('/api/auth/register', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password are required' });
     }
+
+    const db = await getDb();
+    
+    // Check if user exists
+    const existingUser = await db.oneOrNone('SELECT * FROM users WHERE username = $1', [username]);
+    if (existingUser) {
+      return res.status(400).json({ error: 'Username already taken' });
+    }
+
+    const hashedPassword = await hashPassword(password);
+    const userId = crypto.randomUUID(); // Requires Node 19+ global crypto, or you can use a uuid lib
+
+    const newUser = await db.one(`
+      INSERT INTO users (id, username, password, role)
+      VALUES ($1, $2, $3, $4)
+      RETURNING id, username, role, created_at
+    `, [userId, username, hashedPassword, 'user']);
+
+    const token = jwt.sign(
+      { id: newUser.id, username: newUser.username, role: newUser.role },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    return res.status(201).json({ user: newUser, token });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
   }
+});
 
-  return frontendUrl.toString();
-}
+router.post('/api/auth/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password are required' });
+    }
 
-function redirectWithAuthError(res, message) {
-  return res.redirect(getFrontendRedirectUrl({ auth_error: message }));
-}
+    const db = await getDb();
+    const user = await db.oneOrNone('SELECT * FROM users WHERE username = $1', [username]);
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    const token = jwt.sign(
+      { id: user.id, username: user.username, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    const userObj = { ...user };
+    delete userObj.password;
+
+    return res.json({ user: userObj, token });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+// ==========================================
+// DISCORD BOT OAUTH2 SYNC
+// ==========================================
+
+router.post('/api/auth/discord/sync', async (req, res) => {
+  try {
+    const { discord_id, display_name, email, avatar_url, role } = req.body;
+    if (!discord_id || !display_name) {
+      return res.status(400).json({ error: 'discord_id and display_name are required' });
+    }
+
+    // Protect this endpoint (e.g. check API key)
+    const apiKey = req.headers.authorization?.replace('Bearer ', '');
+    if (apiKey !== process.env.API_KEY) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const db = await getDb();
+
+    // Upsert discord user
+    const updatedUser = await db.one(`
+      INSERT INTO discord_users (id, display_name, email, avatar_url, discord_role)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (id) DO UPDATE SET
+        display_name = EXCLUDED.display_name,
+        email = EXCLUDED.email,
+        avatar_url = EXCLUDED.avatar_url,
+        discord_role = EXCLUDED.discord_role,
+        updated_at = CURRENT_TIMESTAMP
+      RETURNING *
+    `, [discord_id, display_name, email, avatar_url, role || 'member']);
+
+    return res.json(updatedUser);
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+import axios from 'axios';
+const CLIENT_ID = process.env.CLIENT_ID;
+const CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
+const REDIRECT_URI = process.env.DISCORD_REDIRECT_URI;
 
 router.get('/auth/discord', (req, res) => {
-  const clientId = process.env.CLIENT_ID;
-  const redirectUri = process.env.DISCORD_REDIRECT_URI;
-
-  if (!clientId || !redirectUri) {
-    return redirectWithAuthError(res, 'CLIENT_ID ou DISCORD_REDIRECT_URI nao configurado no .env da API.');
-  }
-
-  const authUrl = new URL('https://discord.com/api/oauth2/authorize');
-  authUrl.searchParams.set('client_id', clientId);
-  authUrl.searchParams.set('redirect_uri', redirectUri);
-  authUrl.searchParams.set('response_type', 'code');
-  authUrl.searchParams.set('scope', 'identify');
-
-  return res.redirect(authUrl.toString());
+  const url = `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=identify%20email`;
+  res.redirect(url);
 });
 
 router.get('/auth/discord/callback', async (req, res) => {
-  const { code, error, error_description } = req.query;
-
-  if (error) {
-    const message = error_description || error;
-    console.warn('Discord OAuth returned an error:', message);
-    return redirectWithAuthError(res, message.toString());
-  }
-
-  if (!code) {
-    return redirectWithAuthError(res, 'Codigo de autorizacao faltando no retorno do Discord.');
-  }
-
-  if (!process.env.CLIENT_ID || !process.env.DISCORD_CLIENT_SECRET || !process.env.DISCORD_REDIRECT_URI) {
-    return redirectWithAuthError(res, 'CLIENT_ID, DISCORD_CLIENT_SECRET ou DISCORD_REDIRECT_URI faltando no .env da API.');
-  }
-
-  if (!process.env.JWT_SECRET) {
-    return redirectWithAuthError(res, 'JWT_SECRET faltando no .env da API.');
-  }
+  const code = req.query.code;
+  if (!code) return res.status(400).send('No code provided');
 
   try {
-    const tokenResponse = await fetch('https://discord.com/api/v10/oauth2/token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      body: new URLSearchParams({
-        client_id: process.env.CLIENT_ID,
-        client_secret: process.env.DISCORD_CLIENT_SECRET,
-        grant_type: 'authorization_code',
-        code: code.toString(),
-        redirect_uri: process.env.DISCORD_REDIRECT_URI
-      })
+    const params = new URLSearchParams();
+    params.append('client_id', CLIENT_ID);
+    params.append('client_secret', CLIENT_SECRET);
+    params.append('grant_type', 'authorization_code');
+    params.append('code', code);
+    params.append('redirect_uri', REDIRECT_URI);
+
+    const tokenResponse = await axios.post('https://discord.com/api/oauth2/token', params, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
     });
 
-    if (!tokenResponse.ok) {
-      const errorMsg = await tokenResponse.text();
-      console.error('Erro na troca de codigo Discord:', errorMsg);
-      return redirectWithAuthError(res, 'Falha ao trocar o codigo do Discord. Confira DISCORD_CLIENT_SECRET e Redirect URI.');
-    }
+    const accessToken = tokenResponse.data.access_token;
 
-    const tokenData = await tokenResponse.json();
-    const accessToken = tokenData.access_token;
-
-    const userResponse = await fetch('https://discord.com/api/v10/users/@me', {
-      headers: {
-        Authorization: `Bearer ${accessToken}`
-      }
+    const userResponse = await axios.get('https://discord.com/api/users/@me', {
+      headers: { Authorization: `Bearer ${accessToken}` }
     });
 
-    if (!userResponse.ok) {
-      const errorMsg = await userResponse.text();
-      console.error('Erro ao buscar usuario Discord:', errorMsg);
-      return redirectWithAuthError(res, 'Falha ao obter dados do usuario no Discord.');
-    }
+    const discordUser = userResponse.data;
+    const db = await getDb();
 
-    const userData = await userResponse.json();
-    const userId = userData.id;
-    const username = userData.username;
-    const globalName = userData.global_name || username;
+    let user = await db.oneOrNone('SELECT * FROM discord_users WHERE id = $1', [discordUser.id]);
 
-    if (!process.env.DISCORD_TOKEN || !process.env.GUILD_ID) {
-      return redirectWithAuthError(res, 'DISCORD_TOKEN ou GUILD_ID faltando no .env da API.');
-    }
-
-    const memberResponse = await fetch(`https://discord.com/api/v10/guilds/${process.env.GUILD_ID}/members/${userId}`, {
-      headers: {
-        Authorization: `Bot ${process.env.DISCORD_TOKEN}`
-      }
-    });
-
-    if (memberResponse.status === 404) {
-      return redirectWithAuthError(res, 'Acesso negado: seu usuario Discord nao esta no servidor configurado em GUILD_ID.');
-    }
-
-    if (!memberResponse.ok) {
-      const errorMsg = await memberResponse.text();
-      console.error('Erro ao validar guilda Discord:', errorMsg);
-      return redirectWithAuthError(res, 'Erro ao validar acesso ao servidor Discord. Confira DISCORD_TOKEN, GUILD_ID e permissoes do bot.');
-    }
-
-    const memberData = await memberResponse.json();
-
-    let avatarUrl = '';
-    if (memberData.avatar) {
-      avatarUrl = `https://cdn.discordapp.com/guilds/${process.env.GUILD_ID}/users/${userId}/avatars/${memberData.avatar}.png`;
-    } else if (userData.avatar) {
-      avatarUrl = `https://cdn.discordapp.com/avatars/${userId}/${userData.avatar}.png`;
+    if (!user) {
+      user = await db.one(`
+        INSERT INTO discord_users (id, display_name, email, avatar_url, discord_role)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING *
+      `, [discordUser.id, discordUser.global_name || discordUser.username, discordUser.email || null, discordUser.avatar || null, 'member']);
     } else {
-      const defaultIndex = userData.discriminator === '0'
-        ? (BigInt(userId) >> 22n) % 6n
-        : parseInt(userData.discriminator, 10) % 5;
-      avatarUrl = `https://cdn.discordapp.com/embed/avatars/${defaultIndex}.png`;
+      user = await db.one(`
+        UPDATE discord_users SET
+          display_name = $2,
+          email = $3,
+          avatar_url = $4,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1
+        RETURNING *
+      `, [discordUser.id, discordUser.global_name || discordUser.username, discordUser.email || null, discordUser.avatar || null]);
     }
 
-    const adminUsers = process.env.ADMIN_USERS
-      ? process.env.ADMIN_USERS.split(',').map(u => u.trim().toLowerCase())
-      : [];
+    const token = jwt.sign(
+      { id: user.id, username: user.display_name, role: user.discord_role },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
 
-    const isUserAdmin = adminUsers.includes(userId) || adminUsers.includes(username.toLowerCase());
-
-    let role = 'user';
-    if (isUserAdmin) {
-      role = 'admin';
-    } else if (process.env.PM_ROLE_ID && memberData.roles) {
-      const pmRoleIds = process.env.PM_ROLE_ID.split(',').map(id => id.trim());
-      const isPM = pmRoleIds.some(roleId => memberData.roles.includes(roleId));
-      if (isPM) role = 'pm';
-    }
-
-    const displayName = memberData.nick || globalName;
-
-    db.prepare(`
-      INSERT INTO discord_users (id, username, display_name, avatar_url, role)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        username = excluded.username,
-        display_name = excluded.display_name,
-        avatar_url = excluded.avatar_url,
-        role = excluded.role
-    `).run(userId, username, displayName, avatarUrl, role);
-
-    const payload = {
-      id: userId,
-      email: userData.email || `${username}@discord.com`,
-      name: displayName,
-      role,
-      avatarUrl
-    };
-
-    const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' });
-    return res.redirect(getFrontendRedirectUrl({ token }));
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    res.redirect(`${frontendUrl}/auth/callback?token=${token}`);
   } catch (error) {
-    console.error('Erro geral no callback do Discord:', error);
-    return redirectWithAuthError(res, `Erro interno durante autenticacao: ${error.message}`);
+    console.error('Discord Auth Error:', error.response?.data || error.message);
+    res.status(500).send('Authentication failed');
   }
 });
 
-router.post('/auth/login', (req, res) => {
-  const { email, password } = req.body;
-
-  if (!email || !password) {
-    return res.status(400).json({ error: 'Email e senha sao obrigatorios.' });
+router.get('/auth/me', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+  const token = authHeader.split(' ')[1];
 
-  if (!user) {
-    return res.status(401).json({ error: 'Credenciais invalidas.' });
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const db = await getDb();
+    
+    // Try discord_users first
+    let dbUser = await db.oneOrNone('SELECT * FROM discord_users WHERE id = $1', [String(decoded.id)]);
+    let userObj = {};
+
+    if (dbUser) {
+      userObj = {
+        id: dbUser.id,
+        name: dbUser.display_name,
+        username: dbUser.display_name,
+        avatarUrl: dbUser.avatar_url,
+        role: dbUser.discord_role
+      };
+    } else {
+      // Try normal users
+      dbUser = await db.oneOrNone('SELECT * FROM users WHERE id = $1', [String(decoded.id)]);
+      if (dbUser) {
+        userObj = {
+          id: dbUser.id,
+          name: dbUser.username,
+          username: dbUser.username,
+          role: dbUser.role
+        };
+      } else {
+        // Fallback to token decoded data
+        userObj = {
+          id: decoded.id,
+          name: decoded.username,
+          username: decoded.username,
+          role: decoded.role
+        };
+      }
+    }
+
+    return res.json({ user: userObj, guildId: null });
+  } catch (err) {
+    return res.status(401).json({ error: 'Expired or invalid token' });
   }
-
-  const isValid = bcrypt.compareSync(password, user.password_hash);
-
-  if (!isValid) {
-    return res.status(401).json({ error: 'Credenciais invalidas.' });
-  }
-
-  const payload = {
-    id: String(user.id),
-    email: user.email,
-    name: user.name,
-    role: user.role,
-    avatarUrl: `https://ui-avatars.com/api/?name=${encodeURIComponent(user.name)}&background=6c63ff&color=fff`
-  };
-  const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' });
-
-  return res.json({
-    token,
-    user: payload
-  });
-});
-
-router.get('/auth/me', authenticateJWT, (req, res) => {
-  if (req.user.id.length > 5) {
-    return res.json({
-      user: {
-        id: req.user.id,
-        name: req.user.name,
-        email: req.user.email,
-        role: req.user.role,
-        avatarUrl: req.user.avatarUrl
-      },
-      guildId: process.env.GUILD_ID || null
-    });
-  }
-
-  const user = db.prepare('SELECT id, name, email, role FROM users WHERE id = ?').get(req.user.id);
-
-  if (!user) {
-    return res.status(404).json({ error: 'Usuario nao encontrado.' });
-  }
-
-  return res.json({
-    user: {
-      ...user,
-      id: String(user.id),
-      avatarUrl: `https://ui-avatars.com/api/?name=${encodeURIComponent(user.name)}&background=6c63ff&color=fff`
-    },
-    guildId: process.env.GUILD_ID || null
-  });
 });
 
 export default router;

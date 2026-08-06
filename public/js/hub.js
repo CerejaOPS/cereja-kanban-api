@@ -15,7 +15,7 @@ async function loadBoards() {
     
     // Add "Visão Geral" block
     grid.innerHTML = `
-      <div class="board-card" onclick="openBoard('all', 'Visão Geral', '#6366f1')" style="--board-color: #6366f1">
+      <div class="board-card" onclick="openBoard('all', 'Visão Geral', '#6366f1', 'visao-geral')" style="--board-color: #6366f1">
         <div class="board-card-content">
           <div class="board-icon">🌐</div>
           <div>
@@ -33,7 +33,7 @@ async function loadBoards() {
     boards.forEach(b => {
       const color = b.color || '#6C63FF';
       grid.innerHTML += `
-        <div class="board-card" onclick="openBoard('${b.id}', '${b.name}', '${color}')" style="--board-color: ${color}">
+        <div class="board-card" onclick="openBoard('${b.id}', '${b.name}', '${color}', '${b.slug}')" style="--board-color: ${color}">
           <div class="board-card-content">
             <div class="board-icon">${b.icon || '📋'}</div>
             <div>
@@ -63,7 +63,7 @@ async function loadBoards() {
   }
 }
 
-function openBoard(id, name, color, pushState = true) {
+function openBoard(id, name, color, slug, pushState = true) {
   window.myTasksMode = false;
   window.currentBoardId = id;
   document.getElementById('view-hub').style.display = 'none';
@@ -75,7 +75,7 @@ function openBoard(id, name, color, pushState = true) {
   document.documentElement.style.setProperty('--accent', color);
 
   if (pushState) {
-    history.pushState({ boardId: id, name, color }, '', '#board=' + id);
+    history.pushState({ boardId: id, name, color, slug }, '', '/kanban/' + slug);
   }
 
   if (typeof renderBoard === 'function') {
@@ -94,13 +94,13 @@ function openHub(pushState = true) {
   document.documentElement.style.setProperty('--accent', '#6366f1'); // Reset to default
 
   if (pushState) {
-    history.pushState({ hub: true }, '', '#hub');
+    history.pushState({ hub: true }, '', '/kanban/hub');
   }
 
   loadBoards();
 }
 
-function openMyTasks() {
+function openMyTasks(pushState = true) {
   window.myTasksMode = true;
   window.currentBoardId = 'all';
   
@@ -110,6 +110,10 @@ function openMyTasks() {
   
   document.getElementById('app-logo-name').innerHTML = '<i class="fa-solid fa-user-check" style="margin-right: 6px;"></i> Minhas Tasks';
   document.documentElement.style.setProperty('--accent', '#6C63FF');
+
+  if (pushState) {
+    history.pushState({ myTasks: true }, '', '/minhas-tasks');
+  }
 
   if (typeof renderBoard === 'function') {
     renderBoard();
@@ -233,29 +237,64 @@ async function executeDeleteBoard(id) {
 
 // History API popstate handling for back button
 window.addEventListener('popstate', (e) => {
-  if (e.state && e.state.boardId) {
-    openBoard(e.state.boardId, e.state.name, e.state.color, false);
+  if (e.state) {
+    if (e.state.myTasks) {
+      openMyTasks(false);
+    } else if (e.state.boardId) {
+      openBoard(e.state.boardId, e.state.name, e.state.color, e.state.slug, false);
+    } else {
+      openHub(false);
+    }
   } else {
-    openHub(false);
+    handlePathRouting(false);
   }
 });
 
+async function handlePathRouting(pushState = true) {
+  const path = window.location.pathname;
+  
+  if (path === '/minhas-tasks') {
+    openMyTasks(pushState);
+  } else if (path.startsWith('/kanban/')) {
+    const slug = path.split('/kanban/')[1];
+    
+    if (slug === 'hub' || slug === '') {
+      openHub(pushState);
+      return;
+    }
+    
+    if (slug === 'visao-geral') {
+      openBoard('all', 'Visão Geral', '#6366f1', 'visao-geral', pushState);
+      return;
+    }
+    
+    // We need to fetch boards to find the ID and info from the slug
+    try {
+      const res = await fetch('/api/boards', {
+        headers: typeof getAuthHeaders === 'function' ? getAuthHeaders() : {}
+      });
+      if (res.ok) {
+        const boards = await res.json();
+        const board = boards.find(b => b.slug === slug);
+        if (board) {
+          openBoard(board.id, board.name, board.color || '#6C63FF', board.slug, pushState);
+        } else {
+          openHub(pushState);
+        }
+      } else {
+        openHub(pushState);
+      }
+    } catch (err) {
+      openHub(pushState);
+    }
+  } else {
+    // Default to hub for /hub or unknown paths
+    openHub(pushState);
+  }
+}
+
 // Load boards on init if not already loaded by main.js
 document.addEventListener('DOMContentLoaded', () => {
-  // Check hash on load
-  const hash = window.location.hash;
-  if (hash.startsWith('#board=')) {
-    // If it's a direct link to a board, we need to load boards first then open
-    loadBoards().then(() => {
-      // Find the board from the hash
-      const id = hash.split('=')[1];
-      // Since we don't have name/color stored in state on direct load easily without fetching again,
-      // it's slightly limited. Let's just go to Hub if direct link for now.
-      openHub(false);
-    });
-  } else {
-    if (document.getElementById('view-hub') && document.getElementById('view-hub').style.display !== 'none') {
-      openHub(false);
-    }
-  }
+  // Check path on load
+  handlePathRouting(false);
 });

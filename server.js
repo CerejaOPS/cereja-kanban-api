@@ -4,11 +4,13 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import 'dotenv/config';
 
-import { initDatabase } from './database.js';
+import logger from './lib/logger.js';
+import { getDb } from './lib/db.js';
 import authRouter from './routes/auth.js';
 import tasksRouter from './routes/tasks.js';
 import statsRouter from './routes/stats.js';
 import boardsRouter from './routes/boards.js';
+import { addClient, removeClient } from './services/sseService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -17,17 +19,58 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // Middlewares
-app.use(cors({ origin: '*' }));
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 
 // Serve static files from the 'public' directory
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Server-Sent Events endpoint
+app.get('/api/events', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive'
+  });
+  res.write(': heartbeat\n\n');
+
+  addClient(res);
+  req.on('close', () => {
+    removeClient(res);
+  });
+});
 
 // Routers
 app.use('/', authRouter);
 app.use('/', tasksRouter);
 app.use('/', statsRouter);
 app.use('/', boardsRouter);
+
+// Discord bot status endpoint
+app.get('/api/discord/status', async (req, res) => {
+  const BOT_BASE_URL = process.env.BOT_WEBHOOK_BASE_URL || process.env.BOT_WEBHOOK_URL || 'http://localhost:3005';
+  let botOnline = false;
+
+  try {
+    const axios = (await import('axios')).default;
+    const response = await axios.get(`${BOT_BASE_URL}/health`, { timeout: 3000 });
+    botOnline = response.status === 200;
+  } catch (e) {
+    botOnline = false;
+  }
+
+  return res.json({
+    botOnline,
+    botUrl: BOT_BASE_URL,
+    channels: {
+      forum: process.env.FORUM_CHANNEL_ID || null,
+      review: process.env.REVIEW_CHANNEL_ID || null,
+      alerts: process.env.ALERTS_CHANNEL_ID || null,
+      summary: process.env.KANBAN_SUMMARY_CHANNEL_ID || null,
+      log: process.env.LOG_CHANNEL_ID || null,
+    }
+  });
+});
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -37,18 +80,23 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Serve frontend SPA fallback if requested (optional but good practice)
+// Serve frontend SPA fallback Se solicitado
 app.get('*', (req, res, next) => {
-  // If it's an API request, skip to error/404 handling
   if (req.path.startsWith('/api/') || req.path.startsWith('/auth/')) {
     return next();
   }
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Initialize database then start server
-initDatabase();
+// Initialize database (which runs migrations automatically) then start server
+getDb()
+  .then(() => {
+    logger.info('✅ Conectado ao banco de dados e migrações verificadas (pg-promise)');
+  })
+  .catch((e) => {
+    logger.error('❌ Erro ao conectar no Postgres:', e);
+  });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Cereja Kanban API rodando em http://localhost:${PORT}`);
+  logger.info(`🚀 Cereja Kanban API rodando em http://localhost:${PORT}`);
 });

@@ -1,25 +1,36 @@
-FROM node:20-alpine
+FROM node:lts-trixie AS tester
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+RUN npm run test
 
-# Install build tools for native modules (better-sqlite3 needs them)
+FROM node:lts-alpine AS builder
+WORKDIR /app
+# hadolint ignore=DL3018
 RUN apk add --no-cache python3 make g++
+COPY package*.json ./
+RUN npm install
+COPY . .
+RUN npm run build
+RUN npm prune --omit=dev
 
+FROM node:lts-alpine
 WORKDIR /app
 
-# Copy package files first for layer caching
-COPY package*.json ./
+# Como este é um projeto JS puro, não há pasta build/src. 
+# Copiamos as pastas vitais do sistema direto.
+COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/server.js ./server.js
+COPY --from=builder /app/seed.js ./seed.js
+COPY --from=builder /app/lib ./lib
+COPY --from=builder /app/routes ./routes
+COPY --from=builder /app/controllers ./controllers
+COPY --from=builder /app/migrations ./migrations
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/public ./public
 
-RUN npm ci --omit=dev
-
-# Copy source
-COPY . .
-
-# Create data directory for SQLite
-RUN mkdir -p /app/data
-
-# Run seed only if DB doesn't exist yet (handled at runtime via entrypoint)
-COPY docker-entrypoint.sh /docker-entrypoint.sh
-RUN chmod +x /docker-entrypoint.sh
-
+# Expõe a porta e define entrypoint
 EXPOSE 3001
-
-ENTRYPOINT ["/docker-entrypoint.sh"]
+ENTRYPOINT [ "node" ]
+CMD [ "server.js" ]

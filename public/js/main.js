@@ -53,6 +53,10 @@
   let editingColumnId = null;
   let sseSource = null;
   let drawerOpen = false;
+
+  // Quill Rich Text Editors
+  let quillCreate = null;
+  let quillDetails = null;
   
   const presetColors = [
     '#ef4444', '#f97316', '#eab308', '#10b981', 
@@ -220,6 +224,31 @@
         await Promise.all([loadPhases(), loadMembers(), loadLabels()]);
         await renderBoard();
         connectSSE();
+
+        // Initialize Quill Rich Text Editors
+        const quillToolbar = [
+          ['bold', 'italic', 'underline', 'strike'],
+          [{ 'list': 'ordered' }, { 'list': 'bullet' }],
+          ['code-block', 'link'],
+          ['clean']
+        ];
+
+        if (!quillCreate && document.getElementById('ct-desc')) {
+          quillCreate = new Quill('#ct-desc', {
+            theme: 'snow',
+            placeholder: 'Descreva os requisitos...',
+            modules: { toolbar: quillToolbar }
+          });
+        }
+
+        if (!quillDetails && document.getElementById('d-desc')) {
+          quillDetails = new Quill('#d-desc', {
+            theme: 'snow',
+            placeholder: 'Sem descrição...',
+            modules: { toolbar: quillToolbar }
+          });
+        }
+
       } catch (err) {
         console.error('Erro ao carregar dados do Kanban:', err);
         toast('Login feito, mas houve erro ao carregar o Kanban.', 'error');
@@ -871,7 +900,7 @@
     const sel = document.getElementById('ct-phase');
     sel.innerHTML = allPhases.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
     document.getElementById('ct-title').value = '';
-    document.getElementById('ct-desc').value = '';
+    if (quillCreate) quillCreate.setContents([]);
     document.getElementById('ct-due-date').value = '';
     
     // Clear selections and hide dropdowns
@@ -927,7 +956,8 @@
 
   async function submitCreateTask() {
     const title = document.getElementById('ct-title').value.trim();
-    const desc = document.getElementById('ct-desc').value;
+    let desc = quillCreate ? quillCreate.root.innerHTML : '';
+    if (desc === '<p><br></p>' || desc === '<p></p>') desc = '';
     const phase = document.getElementById('ct-phase').value;
     const boardId = document.getElementById('ct-board') ? document.getElementById('ct-board').value : 1;
     const dueDate = document.getElementById('ct-due-date').value || null;
@@ -1000,7 +1030,7 @@
       
       // Reset Create Form
       document.getElementById('ct-title').value = '';
-      document.getElementById('ct-desc').value = '';
+      if (quillCreate) quillCreate.setContents([]);
       createTaskLabels = [];
       renderSelectedLabels('create');
       createChecklistItems = [];
@@ -1050,7 +1080,9 @@
     // Populate fields
     document.getElementById('edit-title-input').value = task.title;
     document.getElementById('d-id').textContent = `#${task.id}`;
-    document.getElementById('d-desc').value = task.description || '';
+    if (quillDetails) {
+      quillDetails.clipboard.dangerouslyPasteHTML(task.description || '');
+    }
     const timeDisplay = document.getElementById('d-total-time-display');
     if (timeDisplay) timeDisplay.textContent = formatMinutes(task.timeSpent || 0);
     // Show admin override only for admins
@@ -1127,7 +1159,9 @@
     if (!currentTaskId || !currentTaskSnapshot) return;
 
     const newTitle = document.getElementById('edit-title-input').value.trim();
-    const newDesc = document.getElementById('d-desc').value;
+    let newDesc = quillDetails ? quillDetails.root.innerHTML : '';
+    // Normalize empty Quill output
+    if (newDesc === '<p><br></p>' || newDesc === '<p></p>') newDesc = '';
     const newPhase = document.getElementById('d-phase-select').value;
     const newAssignee = document.getElementById('d-assignee-select').value;
     const newTime = currentTaskSnapshot.time_spent; // time is now logged separately

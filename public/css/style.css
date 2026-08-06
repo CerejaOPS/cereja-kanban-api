@@ -1621,3 +1621,91 @@
       background: rgba(255,255,255,0.1);
       border-left: 3px solid var(--board-color, var(--accent));
     }
+
+    /* ============================================================
+       QUILL EDITOR — DARK THEME OVERRIDES
+       ============================================================ */
+    .ql-toolbar.ql-snow {
+      background: rgba(255,255,255,0.04) !important;
+      border: 1px solid var(--border) !important;
+      border-radius: 8px 8px 0 0 !important;
+      padding: 6px 8px !important;
+    }
+    .ql-container.ql-snow {
+      border: 1px solid var(--border) !important;
+      border-top: none !important;
+      border-radius: 0 0 8px 8px !important;
+      font-family: 'Inter', sans-serif !important;
+      font-size: 13px !important;
+      color: var(--text) !important;
+      background: rgba(0,0,0,0.15) !important;
+    }
+    .ql-editor {
+      min-height: 100px;
+      color: var(--text) !important;
+      padding: 12px 14px !important;
+    }
+    .ql-editor.ql-blank::before {
+      color: var(--text-dim) !important;
+      font-style: normal !important;
+    }
+    .ql-snow .ql-stroke {
+      stroke: var(--text-muted) !important;
+    }
+    .ql-snow .ql-fill,
+    .ql-snow .ql-stroke.ql-fill {
+      fill: var(--text-muted) !important;
+    }
+    .ql-snow .ql-picker-label {
+      color: var(--text-muted) !important;
+    }
+    .ql-snow .ql-picker-options {
+      background: var(--bg-column) !important;
+      border: 1px solid var(--border) !important;
+      border-radius: 6px !important;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4) !important;
+    }
+    .ql-snow .ql-picker-item {
+      color: var(--text) !important;
+    }
+    .ql-toolbar.ql-snow button:hover .ql-stroke,
+    .ql-toolbar.ql-snow button.ql-active .ql-stroke {
+      stroke: var(--accent) !important;
+    }
+    .ql-toolbar.ql-snow button:hover .ql-fill,
+    .ql-toolbar.ql-snow button.ql-active .ql-fill {
+      fill: var(--accent) !important;
+    }
+    .ql-toolbar.ql-snow button:hover,
+    .ql-toolbar.ql-snow button.ql-active {
+      color: var(--accent) !important;
+    }
+    .ql-editor a {
+      color: var(--accent) !important;
+    }
+    .ql-editor code,
+    .ql-editor pre.ql-syntax {
+      background: rgba(0,0,0,0.3) !important;
+      color: #e2e8f0 !important;
+      border-radius: 4px !important;
+      padding: 8px 12px !important;
+      font-family: 'Fira Code', 'Consolas', monospace !important;
+      font-size: 12px !important;
+    }
+    .ql-snow .ql-tooltip {
+      background: var(--bg-column) !important;
+      border: 1px solid var(--border) !important;
+      color: var(--text) !important;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.4) !important;
+      border-radius: 6px !important;
+    }
+    .ql-snow .ql-tooltip input[type="text"] {
+      background: var(--bg-input) !important;
+      border: 1px solid var(--border) !important;
+      color: var(--text) !important;
+      border-radius: 4px !important;
+    }
+    .ql-snow .ql-tooltip a.ql-action::after,
+    .ql-snow .ql-tooltip a.ql-remove::before {
+      color: var(--accent) !important;
+    }

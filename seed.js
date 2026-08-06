@@ -1,29 +1,35 @@
-import { db, initDatabase } from './database.js';
+import { getDb } from './lib/db.js';
 
-async function seed() {
-  console.log('Starting database seed with customized settings...');
-
-  initDatabase();
-
-  db.prepare('DELETE FROM users').run();
-  db.prepare('DELETE FROM tasks').run();
-  db.prepare('DELETE FROM comments').run();
-  db.prepare('DELETE FROM activity_log').run();
-  db.prepare('DELETE FROM phases').run();
-  db.prepare('DELETE FROM labels').run();
-  db.prepare('DELETE FROM task_labels').run();
-  db.prepare('DELETE FROM discord_users').run();
+async function main() {
+  console.log('Starting database seed with pg-promise...');
   
-  // Reset autoincrement ID counters
-  try {
-    db.prepare('DELETE FROM sqlite_sequence').run();
-  } catch(e) {
-    // sqlite_sequence might not exist if no autoincrement tables were touched yet
-  }
+  const db = await getDb();
+
+  // Limpar banco de dados existente (cuidado em producao)
+  await db.none('DELETE FROM activity_logs');
+  await db.none('DELETE FROM checklist_activities');
+  await db.none('DELETE FROM checklist_comments');
+  await db.none('DELETE FROM task_checklists');
+  await db.none('DELETE FROM task_labels');
+  await db.none('DELETE FROM comments');
+  await db.none('DELETE FROM task_time_entries');
+  await db.none('DELETE FROM task_observations');
+  await db.none('DELETE FROM task_field_values');
+  await db.none('DELETE FROM tasks');
+  
+  await db.none('DELETE FROM phase_rules');
+  await db.none('DELETE FROM board_fields');
+  await db.none('DELETE FROM boards');
+  
+  await db.none('DELETE FROM discord_users');
+  await db.none('DELETE FROM users');
+  await db.none('DELETE FROM phases');
+  await db.none('DELETE FROM labels');
 
   console.log('Fallback admin user creation skipped.');
   console.log('Users will be created dynamically upon login or via sync.');
 
+  // Default Phases
   const defaultPhases = [
     { id: 'backlog', name: 'Backlog', position: 0 },
     { id: 'todo', name: 'TO-DO', position: 1 },
@@ -34,11 +40,11 @@ async function seed() {
   ];
 
   for (const phase of defaultPhases) {
-    db.prepare('INSERT INTO phases (id, name, position) VALUES (?, ?, ?)')
-      .run(phase.id, phase.name, phase.position);
-    console.log(`Seeding column phase: ${phase.name}`);
+    await db.none('INSERT INTO phases (id, name, position) VALUES ($1, $2, $3)', [phase.id, phase.name, phase.position]);
   }
+  console.log('Seeded default phases.');
 
+  // Default Labels
   const defaultLabels = [
     { name: 'Bug', color: '#ef4444' },
     { name: 'Feature', color: '#3b82f6' },
@@ -48,15 +54,24 @@ async function seed() {
   ];
 
   for (const label of defaultLabels) {
-    db.prepare('INSERT INTO labels (name, color) VALUES (?, ?)')
-      .run(label.name, label.color);
-    console.log(`Seeding label: ${label.name}`);
+    await db.none('INSERT INTO labels (name, color) VALUES ($1, $2)', [label.name, label.color]);
   }
+  console.log('Seeded default labels.');
 
+  // Initial Board
+  await db.none(`
+    INSERT INTO boards (id, name, slug, color, icon) 
+    VALUES ($1, $2, $3, $4, $5)
+  `, [1, 'Painel Principal', 'main', '#6C63FF', '📋']);
+  
   console.log('Initializing empty tasks board.');
+  
   console.log('Seeding completed successfully!');
+  
+  process.exit(0);
 }
 
-seed().catch(err => {
-  console.error('Seeding failed:', err);
+main().catch((e) => {
+  console.error('Seeding failed:', e);
+  process.exit(1);
 });

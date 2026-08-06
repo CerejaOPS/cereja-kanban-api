@@ -1,426 +1,166 @@
-import express from 'express';
-import { db } from '../database.js';
-import { authenticateApiKey, authenticateJWT } from '../middleware/auth.js';
+import { Router } from 'express';
+import { getDb } from '../lib/db.js';
 
-const router = express.Router();
+const router = Router();
 
-function requireAuthOrApiKey(req, res, next) {
-  if (req.headers['x-api-key']) {
-    return authenticateApiKey(req, res, next);
-  }
-  return authenticateJWT(req, res, next);
-}
+// ==========================================
+// BOARDS
+// ==========================================
 
-// GET /api/boards - Lista todos os boards
-router.get('/api/boards', (req, res) => {
+router.get('/api/boards', async (req, res) => {
   try {
-    const boards = db.prepare('SELECT * FROM boards ORDER BY id ASC').all();
+    const db = await getDb();
+    const boards = await db.any('SELECT * FROM boards ORDER BY id ASC');
     return res.json(boards);
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
   }
 });
 
-// GET /api/boards/:id - Retorna um board
-router.get('/api/boards/:id', (req, res) => {
+router.post('/api/boards', async (req, res) => {
   try {
-    const board = db.prepare('SELECT * FROM boards WHERE id = ?').get(req.params.id);
-    if (!board) return res.status(404).json({ error: 'Board not found' });
-    return res.json(board);
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
+    const { name, slug, description, color, icon } = req.body;
+    if (!name || !slug) return res.status(400).json({ error: 'name and slug are required' });
 
-// POST /api/boards - Cria um novo board
-router.post('/api/boards', requireAuthOrApiKey, (req, res) => {
-  try {
-    const { name, color, icon } = req.body;
-    if (!name) return res.status(400).json({ error: 'Name is required' });
-
-    const info = db.prepare(`
-      INSERT INTO boards (name, color, icon) VALUES (?, ?, ?)
-    `).run(name, color || '#6C63FF', icon || '📋');
-
-    return res.status(201).json({
-      id: info.lastInsertRowid,
-      name,
-      color: color || '#6C63FF',
-      icon: icon || '📋'
-    });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// PUT /api/boards/:id - Atualiza um board
-router.put('/api/boards/:id', requireAuthOrApiKey, (req, res) => {
-  try {
-    const { name, color, icon } = req.body;
-    const boardId = req.params.id;
+    const db = await getDb();
+    const newBoard = await db.one(`
+      INSERT INTO boards (name, slug, description, color, icon)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING *
+    `, [name, slug, description, color, icon]);
     
-    if (!name) return res.status(400).json({ error: 'Name is required' });
+    return res.status(201).json(newBoard);
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
 
-    const info = db.prepare(`
-      UPDATE boards SET name = ?, color = ?, icon = ?, updated_at = datetime('now') WHERE id = ?
-    `).run(name, color, icon, boardId);
+router.put('/api/boards/:id', async (req, res) => {
+  try {
+    const { name, slug, description, color, icon, is_active } = req.body;
+    const db = await getDb();
+    
+    const updated = await db.one(`
+      UPDATE boards 
+      SET name = $1, slug = $2, description = $3, color = $4, icon = $5, is_active = $6, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $7
+      RETURNING *
+    `, [name, slug, description, color, icon, is_active, req.params.id]);
 
-    if (info.changes === 0) return res.status(404).json({ error: 'Board not found' });
-
-    const updated = db.prepare('SELECT * FROM boards WHERE id = ?').get(boardId);
     return res.json(updated);
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
   }
 });
 
-// DELETE /api/boards/:id - Deleta um board
-router.delete('/api/boards/:id', requireAuthOrApiKey, (req, res) => {
+router.delete('/api/boards/:id', async (req, res) => {
   try {
-    const boardId = req.params.id;
-    
-    // Check if it has tasks
-    const taskCount = db.prepare('SELECT COUNT(*) as count FROM tasks WHERE board_id = ?').get(boardId).count;
-    if (taskCount > 0) {
-      return res.status(400).json({ error: 'Cannot delete board with existing tasks. Move or delete tasks first.' });
-    }
-
-    const info = db.prepare('DELETE FROM boards WHERE id = ?').run(boardId);
-    if (info.changes === 0) return res.status(404).json({ error: 'Board not found' });
-    
+    const db = await getDb();
+    await db.none('DELETE FROM boards WHERE id = $1', [req.params.id]);
     return res.json({ success: true });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
   }
 });
 
 // ==========================================
-// BOARD FIELDS (Custom Fields por Quadro)
+// PHASE RULES
 // ==========================================
 
-// GET /api/boards/:id/fields - Lista campos customizados do quadro
-router.get('/api/boards/:id/fields', (req, res) => {
+router.get('/api/boards/:boardId/rules', async (req, res) => {
   try {
-    const fields = db.prepare('SELECT * FROM board_fields WHERE board_id = ? ORDER BY position ASC').all(req.params.id);
-    return res.json(fields);
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// POST /api/boards/:id/fields - Cria campo customizado
-router.post('/api/boards/:id/fields', requireAuthOrApiKey, (req, res) => {
-  try {
-    const { name, type, options, is_required_on_start, position } = req.body;
-    if (!name) return res.status(400).json({ error: 'Nome do campo é obrigatório.' });
-
-    const maxPos = db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS next FROM board_fields WHERE board_id = ?').get(req.params.id).next;
-
-    const info = db.prepare(`
-      INSERT INTO board_fields (board_id, name, type, options, is_required_on_start, position)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(req.params.id, name, type || 'text', options || null, is_required_on_start ? 1 : 0, position ?? maxPos);
-
-    const field = db.prepare('SELECT * FROM board_fields WHERE id = ?').get(info.lastInsertRowid);
-    return res.status(201).json(field);
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// PUT /api/boards/:boardId/fields/:fieldId - Atualiza campo
-router.put('/api/boards/:boardId/fields/:fieldId', requireAuthOrApiKey, (req, res) => {
-  try {
-    const { name, type, options, is_required_on_start, position } = req.body;
-    const info = db.prepare(`
-      UPDATE board_fields SET name = ?, type = ?, options = ?, is_required_on_start = ?, position = ?
-      WHERE id = ? AND board_id = ?
-    `).run(name, type || 'text', options || null, is_required_on_start ? 1 : 0, position ?? 0, req.params.fieldId, req.params.boardId);
-
-    if (info.changes === 0) return res.status(404).json({ error: 'Campo não encontrado.' });
-
-    const field = db.prepare('SELECT * FROM board_fields WHERE id = ?').get(req.params.fieldId);
-    return res.json(field);
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// DELETE /api/boards/:boardId/fields/:fieldId - Remove campo
-router.delete('/api/boards/:boardId/fields/:fieldId', requireAuthOrApiKey, (req, res) => {
-  try {
-    const info = db.prepare('DELETE FROM board_fields WHERE id = ? AND board_id = ?').run(req.params.fieldId, req.params.boardId);
-    if (info.changes === 0) return res.status(404).json({ error: 'Campo não encontrado.' });
-    return res.json({ success: true });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// ==========================================
-// PHASE RULES (Políticas de Fase)
-// ==========================================
-
-// GET /api/boards/:id/phase-rules - Lista regras de fase do quadro
-router.get('/api/boards/:id/phase-rules', (req, res) => {
-  try {
-    const rules = db.prepare('SELECT * FROM phase_rules WHERE board_id = ?').all(req.params.id);
+    const db = await getDb();
+    const rules = await db.any('SELECT * FROM phase_rules WHERE board_id = $1', [req.params.boardId]);
     return res.json(rules);
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
   }
 });
 
-// PUT /api/boards/:id/phase-rules/:phaseId - Cria ou atualiza regra de fase
-router.put('/api/boards/:id/phase-rules/:phaseId', requireAuthOrApiKey, (req, res) => {
+router.put('/api/boards/:boardId/rules', async (req, res) => {
   try {
-    const { require_checklist_done, require_assignee, required_field_ids } = req.body;
-    const boardId = req.params.id;
-    const phaseId = req.params.phaseId;
+    const { phase_id, require_assignee, require_checklist_done, require_custom_fields } = req.body;
+    if (!phase_id) return res.status(400).json({ error: 'phase_id is required' });
 
-    const fieldIdsJson = JSON.stringify(required_field_ids || []);
+    const db = await getDb();
+    const upserted = await db.one(`
+      INSERT INTO phase_rules (board_id, phase_id, require_assignee, require_checklist_done, require_custom_fields)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (board_id, phase_id) DO UPDATE SET
+        require_assignee = EXCLUDED.require_assignee,
+        require_checklist_done = EXCLUDED.require_checklist_done,
+        require_custom_fields = EXCLUDED.require_custom_fields
+      RETURNING *
+    `, [req.params.boardId, phase_id, !!require_assignee, !!require_checklist_done, require_custom_fields]);
 
-    db.prepare(`
-      INSERT INTO phase_rules (board_id, phase_id, require_checklist_done, require_assignee, required_field_ids)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(board_id, phase_id) DO UPDATE SET
-        require_checklist_done = excluded.require_checklist_done,
-        require_assignee = excluded.require_assignee,
-        required_field_ids = excluded.required_field_ids
-    `).run(boardId, phaseId, require_checklist_done ? 1 : 0, require_assignee ? 1 : 0, fieldIdsJson);
-
-    const rule = db.prepare('SELECT * FROM phase_rules WHERE board_id = ? AND phase_id = ?').get(boardId, phaseId);
-    return res.json(rule);
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// DELETE /api/boards/:id/phase-rules/:phaseId - Remove regra de fase
-router.delete('/api/boards/:id/phase-rules/:phaseId', requireAuthOrApiKey, (req, res) => {
-  try {
-    const info = db.prepare('DELETE FROM phase_rules WHERE board_id = ? AND phase_id = ?').run(req.params.id, req.params.phaseId);
-    if (info.changes === 0) return res.status(404).json({ error: 'Regra não encontrada.' });
-    return res.json({ success: true });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.json(upserted);
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
   }
 });
 
 // ==========================================
-// TASK FIELD VALUES
+// CUSTOM FIELDS
 // ==========================================
 
-// GET /api/tasks/:taskId/fields - Lista valores dos campos de uma task
-router.get('/api/tasks/:taskId/fields', (req, res) => {
+router.get('/api/boards/:boardId/fields', async (req, res) => {
   try {
-    const values = db.prepare(`
-      SELECT tfv.*, bf.name AS field_name, bf.type AS field_type, bf.options AS field_options
-      FROM task_field_values tfv
-      JOIN board_fields bf ON bf.id = tfv.field_id
-      WHERE tfv.task_id = ?
-      ORDER BY bf.position ASC
-    `).all(req.params.taskId);
-    return res.json(values);
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// PUT /api/tasks/:taskId/fields - Salva/atualiza valores dos campos da task
-router.put('/api/tasks/:taskId/fields', requireAuthOrApiKey, (req, res) => {
-  try {
-    const { fields } = req.body; // Array de { field_id, value }
-    if (!Array.isArray(fields)) return res.status(400).json({ error: 'fields deve ser um array.' });
-
-    const upsert = db.prepare(`
-      INSERT INTO task_field_values (task_id, field_id, value)
-      VALUES (?, ?, ?)
-      ON CONFLICT(task_id, field_id) DO UPDATE SET value = excluded.value
-    `);
-
-    const runAll = db.transaction(() => {
-      for (const f of fields) {
-        upsert.run(req.params.taskId, f.field_id, f.value || '');
-      }
-    });
-    runAll();
-
-    const values = db.prepare(`
-      SELECT tfv.*, bf.name AS field_name, bf.type AS field_type
-      FROM task_field_values tfv
-      JOIN board_fields bf ON bf.id = tfv.field_id
-      WHERE tfv.task_id = ?
-      ORDER BY bf.position ASC
-    `).all(req.params.taskId);
-    return res.json(values);
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// ==========================================
-// BOARD FIELDS (Campos Customizados por Quadro)
-// ==========================================
-
-// GET /api/boards/:id/fields
-router.get('/api/boards/:id/fields', (req, res) => {
-  try {
-    const fields = db.prepare('SELECT * FROM board_fields WHERE board_id = ? ORDER BY position ASC').all(req.params.id);
+    const db = await getDb();
+    const fields = await db.any('SELECT * FROM board_fields WHERE board_id = $1 ORDER BY position ASC', [req.params.boardId]);
     return res.json(fields);
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
   }
 });
 
-// POST /api/boards/:id/fields
-router.post('/api/boards/:id/fields', requireAuthOrApiKey, (req, res) => {
+router.post('/api/boards/:boardId/fields', async (req, res) => {
   try {
-    const { name, type, options, is_required_on_start, position } = req.body;
-    if (!name) return res.status(400).json({ error: 'Nome do campo é obrigatório.' });
+    const { name, type, options, required } = req.body;
+    if (!name || !type) return res.status(400).json({ error: 'name and type are required' });
 
-    const maxPos = db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS next FROM board_fields WHERE board_id = ?').get(req.params.id).next;
+    const db = await getDb();
+    
+    // Get max position
+    const row = await db.one('SELECT COALESCE(MAX(position), 0) as max_pos FROM board_fields WHERE board_id = $1', [req.params.boardId]);
+    const position = parseInt(row.max_pos) + 1;
 
-    const info = db.prepare(`
-      INSERT INTO board_fields (board_id, name, type, options, is_required_on_start, position)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(req.params.id, name, type || 'text', options || null, is_required_on_start ? 1 : 0, position ?? maxPos);
+    const newField = await db.one(`
+      INSERT INTO board_fields (board_id, name, type, options, required, position)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING *
+    `, [req.params.boardId, name, type, options, !!required, position]);
 
-    const field = db.prepare('SELECT * FROM board_fields WHERE id = ?').get(info.lastInsertRowid);
-    return res.status(201).json(field);
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(201).json(newField);
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
   }
 });
 
-// PUT /api/boards/:boardId/fields/:fieldId
-router.put('/api/boards/:boardId/fields/:fieldId', requireAuthOrApiKey, (req, res) => {
+router.put('/api/boards/:boardId/fields/:fieldId', async (req, res) => {
   try {
-    const { name, type, options, is_required_on_start, position } = req.body;
-    const info = db.prepare(`
-      UPDATE board_fields SET name = ?, type = ?, options = ?, is_required_on_start = ?, position = ?
-      WHERE id = ? AND board_id = ?
-    `).run(name, type || 'text', options || null, is_required_on_start ? 1 : 0, position ?? 0, req.params.fieldId, req.params.boardId);
+    const { name, options, required } = req.body;
+    const db = await getDb();
+    
+    const updated = await db.one(`
+      UPDATE board_fields 
+      SET name = $1, options = $2, required = $3 
+      WHERE id = $4 AND board_id = $5
+      RETURNING *
+    `, [name, options, !!required, req.params.fieldId, req.params.boardId]);
 
-    if (info.changes === 0) return res.status(404).json({ error: 'Campo não encontrado.' });
-
-    const field = db.prepare('SELECT * FROM board_fields WHERE id = ?').get(req.params.fieldId);
-    return res.json(field);
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.json(updated);
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
   }
 });
 
-// DELETE /api/boards/:boardId/fields/:fieldId
-router.delete('/api/boards/:boardId/fields/:fieldId', requireAuthOrApiKey, (req, res) => {
+router.delete('/api/boards/:boardId/fields/:fieldId', async (req, res) => {
   try {
-    const info = db.prepare('DELETE FROM board_fields WHERE id = ? AND board_id = ?').run(req.params.fieldId, req.params.boardId);
-    if (info.changes === 0) return res.status(404).json({ error: 'Campo não encontrado.' });
+    const db = await getDb();
+    await db.none('DELETE FROM board_fields WHERE id = $1 AND board_id = $2', [req.params.fieldId, req.params.boardId]);
     return res.json({ success: true });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// ==========================================
-// PHASE RULES (Políticas de Fase)
-// ==========================================
-
-// GET /api/boards/:id/phase-rules
-router.get('/api/boards/:id/phase-rules', (req, res) => {
-  try {
-    const rules = db.prepare('SELECT * FROM phase_rules WHERE board_id = ?').all(req.params.id);
-    return res.json(rules);
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// PUT /api/boards/:id/phase-rules/:phaseId - Cria ou atualiza regra
-router.put('/api/boards/:id/phase-rules/:phaseId', requireAuthOrApiKey, (req, res) => {
-  try {
-    const { require_checklist_done, require_assignee, required_field_ids } = req.body;
-    const boardId = req.params.id;
-    const phaseId = req.params.phaseId;
-
-    const fieldIdsJson = JSON.stringify(required_field_ids || []);
-
-    db.prepare(`
-      INSERT INTO phase_rules (board_id, phase_id, require_checklist_done, require_assignee, required_field_ids)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(board_id, phase_id) DO UPDATE SET
-        require_checklist_done = excluded.require_checklist_done,
-        require_assignee = excluded.require_assignee,
-        required_field_ids = excluded.required_field_ids
-    `).run(boardId, phaseId, require_checklist_done ? 1 : 0, require_assignee ? 1 : 0, fieldIdsJson);
-
-    const rule = db.prepare('SELECT * FROM phase_rules WHERE board_id = ? AND phase_id = ?').get(boardId, phaseId);
-    return res.json(rule);
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// DELETE /api/boards/:id/phase-rules/:phaseId
-router.delete('/api/boards/:id/phase-rules/:phaseId', requireAuthOrApiKey, (req, res) => {
-  try {
-    const info = db.prepare('DELETE FROM phase_rules WHERE board_id = ? AND phase_id = ?').run(req.params.id, req.params.phaseId);
-    if (info.changes === 0) return res.status(404).json({ error: 'Regra não encontrada.' });
-    return res.json({ success: true });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// ==========================================
-// TASK FIELD VALUES
-// ==========================================
-
-// GET /api/tasks/:taskId/fields
-router.get('/api/tasks/:taskId/fields', (req, res) => {
-  try {
-    const values = db.prepare(`
-      SELECT tfv.*, bf.name AS field_name, bf.type AS field_type, bf.options AS field_options
-      FROM task_field_values tfv
-      JOIN board_fields bf ON bf.id = tfv.field_id
-      WHERE tfv.task_id = ?
-      ORDER BY bf.position ASC
-    `).all(req.params.taskId);
-    return res.json(values);
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// PUT /api/tasks/:taskId/fields - Salva/atualiza valores dos campos
-router.put('/api/tasks/:taskId/fields', requireAuthOrApiKey, (req, res) => {
-  try {
-    const { fields } = req.body; // Array de { field_id, value }
-    if (!Array.isArray(fields)) return res.status(400).json({ error: 'fields deve ser um array.' });
-
-    const upsert = db.prepare(`
-      INSERT INTO task_field_values (task_id, field_id, value)
-      VALUES (?, ?, ?)
-      ON CONFLICT(task_id, field_id) DO UPDATE SET value = excluded.value
-    `);
-
-    const runAll = db.transaction(() => {
-      for (const f of fields) {
-        upsert.run(req.params.taskId, f.field_id, f.value || '');
-      }
-    });
-    runAll();
-
-    const values = db.prepare(`
-      SELECT tfv.*, bf.name AS field_name, bf.type AS field_type
-      FROM task_field_values tfv
-      JOIN board_fields bf ON bf.id = tfv.field_id
-      WHERE tfv.task_id = ?
-      ORDER BY bf.position ASC
-    `).all(req.params.taskId);
-    return res.json(values);
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
   }
 });
 
