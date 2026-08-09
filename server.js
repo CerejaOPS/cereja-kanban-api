@@ -11,12 +11,18 @@ import tasksRouter from './routes/tasks.js';
 import statsRouter from './routes/stats.js';
 import boardsRouter from './routes/boards.js';
 import { addClient, removeClient } from './services/sseService.js';
+import swaggerUi from 'swagger-ui-express';
+import YAML from 'yamljs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+// Documentação da API com Swagger
+const swaggerDocument = YAML.load(path.join(__dirname, 'openapi.yaml'));
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
 // Middlewares
 app.use(cors({ origin: true, credentials: true }));

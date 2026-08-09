@@ -1,0 +1,70 @@
+openapi: 3.0.0
+info:
+  title: CherDeal Kanban API
+  description: API interna para o sistema de Kanban e integrações do CherDeal
+  version: 1.0.0
+servers:
+  - url: http://localhost:3001
+    description: Servidor de Desenvolvimento
+paths:
+  /api/tasks:
+    get:
+      summary: Lista todas as tarefas (filtradas por phase opcional)
+      tags:
+        - Tasks
+      parameters:
+        - in: query
+          name: phase
+          schema:
+            type: string
+          required: false
+          description: Filtra por fase da tarefa
+      responses:
+        '200':
+          description: Lista de tarefas retornada com sucesso
+    post:
+      summary: Cria uma nova tarefa
+      tags:
+        - Tasks
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - title
+              properties:
+                title:
+                  type: string
+                description:
+                  type: string
+                phase:
+                  type: string
+                  default: backlog
+                assignee_discord_id:
+                  type: string
+                board_id:
+                  type: integer
+                  default: 1
+      responses:
+        '201':
+          description: Tarefa criada com sucesso
+
+  /api/phases:
+    get:
+      summary: Lista todas as fases do Kanban
+      tags:
+        - Phases
+      responses:
+        '200':
+          description: Lista de fases retornada com sucesso
+
+  /api/labels:
+    get:
+      summary: Lista as etiquetas (tags) disponíveis
+      tags:
+        - Labels
+      responses:
+        '200':
+          description: Lista de etiquetas retornada
