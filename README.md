@@ -2,6 +2,7 @@
 
 A API REST oficial do ecossistema Cereja. Responsável por toda a lógica de negócio do sistema Kanban, integração com o banco de dados e comunicação em tempo real com o Frontend e o Bot do Discord.
 
+> ⚠️ **Em Refatoração:** Este projeto foi originalmente construído em **Node.js (Express)**. Estamos migrando toda a base de código para **Java (Spring Boot 3.x)** com Clean Architecture. O código legado em Node ainda está presente no repositório e será gradualmente substituído pelas novas implementações em Java. As rotas da API, o banco de dados (PostgreSQL) e as integrações (SSE, Webhooks) permanecerão os mesmos — apenas a linguagem e a estrutura interna mudarão.
 ## 🛠️ Tecnologias Principais
 
 *   **Linguagem:** Java 17+
