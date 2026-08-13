@@ -1,4 +1,22 @@
+# Dependências
 node_modules/
-data/
+
+# Variáveis de ambiente (NUNCA commitar os .env reais)
 .env
+.env.local
+.env.production
+
+# Logs
+logs/
 *.log
+
+# Build
+dist/
+build/
+
+# Dados locais do bot
+data/gamification.json
+
+# Sistema operacional
+.DS_Store
+Thumbs.db

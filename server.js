@@ -13,6 +13,8 @@ import boardsRouter from './routes/boards.js';
 import { addClient, removeClient } from './services/sseService.js';
 import swaggerUi from 'swagger-ui-express';
 import YAML from 'yamljs';
+import { requestLogger } from './middlewares/requestLogger.js';
+import { errorHandler } from './middlewares/errorHandler.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -27,6 +29,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 // Middlewares
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
+app.use(requestLogger);
 
 // Serve static files from the 'public' directory
 app.use(express.static(path.join(__dirname, 'public')));
@@ -93,6 +96,14 @@ app.get('*', (req, res, next) => {
   }
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
+
+// Tratamento de Rota API Não Encontrada (404)
+app.use('/api/*', (req, res) => {
+  res.status(404).json({ status: 'error', message: `Rota não encontrada: ${req.method} ${req.originalUrl}` });
+});
+
+// Middleware Global de Tratamento de Erros (DEVE ser o último app.use)
+app.use(errorHandler);
 
 // Initialize database (which runs migrations automatically) then start server
 getDb()

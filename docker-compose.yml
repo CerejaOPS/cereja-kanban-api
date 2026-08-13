@@ -1,13 +1,51 @@
 services:
+  db:
+    image: postgres:16-alpine
+    container_name: chdeal_postgres
+    restart: always
+    shm_size: 128mb
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 12345
+      POSTGRES_DB: chdeal_kanban
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  adminer:
+    image: adminer
+    container_name: chdeal_adminer
+    restart: always
+    ports:
+      - '8080:8080'
+    depends_on:
+      db:
+        condition: service_healthy
+
   kanban-api:
     build:
       context: ./chdeal-kanban-api
       dockerfile: Dockerfile
     container_name: kanban-api
+    restart: unless-stopped
     ports:
-      - "3001:3001"
-    volumes:
-      - kanban-data:/app/data   # Persists the SQLite database
+      - '3001:3001'
+    depends_on:
+      db:
+        condition: service_healthy
     env_file:
       - ./chdeal-kanban-api/.env
-    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: 'postgresql://postgres:12345@db:5432/chdeal_kanban?schema=public'
+      LOG_TO_FILE: 'true'
+      DEBUG_LEVEL_LOG: 'true'
+
+volumes:
+  pgdata:

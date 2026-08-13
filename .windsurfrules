@@ -1,0 +1,36 @@
+# CherDeal Operacional - AI Rules
+These rules apply to any AI assistant working on this repository.
+
+## 1. Project Architecture
+The project consists of three services:
+- `chdeal-frontend`: React + TypeScript frontend using Feature-Sliced Design (FSD).
+- `chdeal-kanban-api`: Node.js Express API. This backend is migrating towards Clean Architecture.
+- `chdeal-discord-bot`: Discord.js bot that receives webhook events from the API.
+
+## 2. General AI Behaviors
+- DO NOT use generic placeholder variable names.
+- ALL comments in the code must be written in Portuguese (pt-BR) to accommodate the college team.
+- Read `ARCHITECTURE.md` before making any significant structural changes.
+- Always use `JSDoc` for backend functions and `TSDoc` for frontend hooks/components.
+- Use GitHub markdown links when creating documentation artifacts.
+
+## 3. Frontend Rules (chdeal-frontend)
+- Strictly follow Feature-Sliced Design (app -> pages -> features -> entities -> shared).
+- DO NOT import a feature from another feature.
+- Use `Shadcn UI` components for building interfaces.
+- DO NOT use Tailwind generic utility colors (e.g., `bg-red-500`). Stick to the curated theme variables defined in the project.
+- Data fetching must be encapsulated inside `entities/*/api.ts` using TanStack Query. Components should NOT use raw `fetch` or `axios` directly.
+
+## 4. Backend Rules (chdeal-kanban-api)
+- DO NOT mix Business Rules, SQL queries, and HTTP routing in the same file.
+- Follow Clean Architecture:
+  - `domain/entities`: Business validation and pure JS objects.
+  - `application/use-cases`: Orchestrates business logic.
+  - `infrastructure/database`: All SQL queries (`pg-promise`) go here.
+  - `interfaces/http/routes`: Express routes that only receive req/res and call the use case.
+- Look at the `chdeal-kanban-api/_templates` folder for reference before coding.
+- Keep the SSE (Server-Sent Events) patterns intact for real-time board updates.
+
+## 5. Collaboration and Formatting
+- Format code according to `.prettierrc`.
+- Never commit actual secrets or `.env` files. Ensure they are in `.gitignore`.
