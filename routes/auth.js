@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { AppError } from '../utils/AppError.js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { getDb } from '../lib/db.js';
@@ -16,11 +17,11 @@ const hashPassword = async (password) => {
 // TRADITIONAL AUTHENTICATION (username/password)
 // ==========================================
 
-router.post('/api/auth/register', async (req, res) => {
+router.post('/api/auth/register', async (req, res, next) => {
   try {
     const { username, password } = req.body;
     if (!username || !password) {
-      return res.status(400).json({ error: 'Username and password are required' });
+      throw new AppError('Username and password are required', 400);
     }
 
     const db = await getDb();
@@ -28,7 +29,7 @@ router.post('/api/auth/register', async (req, res) => {
     // Check if user exists
     const existingUser = await db.oneOrNone('SELECT * FROM users WHERE username = $1', [username]);
     if (existingUser) {
-      return res.status(400).json({ error: 'Username already taken' });
+      throw new AppError('Username already taken', 400);
     }
 
     const hashedPassword = await hashPassword(password);
@@ -48,15 +49,15 @@ router.post('/api/auth/register', async (req, res) => {
 
     return res.status(201).json({ user: newUser, token });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
-router.post('/api/auth/login', async (req, res) => {
+router.post('/api/auth/login', async (req, res, next) => {
   try {
     const { username, password } = req.body;
     if (!username || !password) {
-      return res.status(400).json({ error: 'Username and password are required' });
+      throw new AppError('Username and password are required', 400);
     }
 
     const db = await getDb();
@@ -81,7 +82,7 @@ router.post('/api/auth/login', async (req, res) => {
 
     return res.json({ user: userObj, token });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
@@ -89,11 +90,11 @@ router.post('/api/auth/login', async (req, res) => {
 // DISCORD BOT OAUTH2 SYNC
 // ==========================================
 
-router.post('/api/auth/discord/sync', async (req, res) => {
+router.post('/api/auth/discord/sync', async (req, res, next) => {
   try {
     const { discord_id, display_name, email, avatar_url, role } = req.body;
     if (!discord_id || !display_name) {
-      return res.status(400).json({ error: 'discord_id and display_name are required' });
+      throw new AppError('discord_id and display_name are required', 400);
     }
 
     // Protect this endpoint (e.g. check API key)
@@ -119,7 +120,7 @@ router.post('/api/auth/discord/sync', async (req, res) => {
 
     return res.json(updatedUser);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
@@ -133,7 +134,7 @@ router.get('/auth/discord', (req, res) => {
   res.redirect(url);
 });
 
-router.get('/auth/discord/callback', async (req, res) => {
+router.get('/auth/discord/callback', async (req, res, next) => {
   const code = req.query.code;
   if (!code) return res.status(400).send('No code provided');
 
@@ -192,7 +193,7 @@ router.get('/auth/discord/callback', async (req, res) => {
   }
 });
 
-router.get('/auth/me', async (req, res) => {
+router.get('/auth/me', async (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized' });

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { AppError } from '../utils/AppError.js';
 import { getDb } from '../lib/db.js';
 
 const router = Router();
@@ -7,20 +8,20 @@ const router = Router();
 // BOARDS
 // ==========================================
 
-router.get('/api/boards', async (req, res) => {
+router.get('/api/boards', async (req, res, next) => {
   try {
     const db = await getDb();
     const boards = await db.any('SELECT * FROM boards ORDER BY id ASC');
     return res.json(boards);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
-router.post('/api/boards', async (req, res) => {
+router.post('/api/boards', async (req, res, next) => {
   try {
     const { name, slug, description, color, icon } = req.body;
-    if (!name || !slug) return res.status(400).json({ error: 'name and slug are required' });
+    if (!name || !slug) throw new AppError('name and slug are required', 400);
 
     const db = await getDb();
     const newBoard = await db.one(`
@@ -31,11 +32,11 @@ router.post('/api/boards', async (req, res) => {
     
     return res.status(201).json(newBoard);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
-router.put('/api/boards/:id', async (req, res) => {
+router.put('/api/boards/:id', async (req, res, next) => {
   try {
     const { name, slug, description, color, icon, is_active } = req.body;
     const db = await getDb();
@@ -49,17 +50,17 @@ router.put('/api/boards/:id', async (req, res) => {
 
     return res.json(updated);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
-router.delete('/api/boards/:id', async (req, res) => {
+router.delete('/api/boards/:id', async (req, res, next) => {
   try {
     const db = await getDb();
     await db.none('DELETE FROM boards WHERE id = $1', [req.params.id]);
     return res.json({ success: true });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
@@ -67,20 +68,20 @@ router.delete('/api/boards/:id', async (req, res) => {
 // PHASE RULES
 // ==========================================
 
-router.get('/api/boards/:boardId/rules', async (req, res) => {
+router.get('/api/boards/:boardId/rules', async (req, res, next) => {
   try {
     const db = await getDb();
     const rules = await db.any('SELECT * FROM phase_rules WHERE board_id = $1', [req.params.boardId]);
     return res.json(rules);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
-router.put('/api/boards/:boardId/rules', async (req, res) => {
+router.put('/api/boards/:boardId/rules', async (req, res, next) => {
   try {
     const { phase_id, require_assignee, require_checklist_done, require_custom_fields } = req.body;
-    if (!phase_id) return res.status(400).json({ error: 'phase_id is required' });
+    if (!phase_id) throw new AppError('phase_id is required', 400);
 
     const db = await getDb();
     const upserted = await db.one(`
@@ -95,7 +96,7 @@ router.put('/api/boards/:boardId/rules', async (req, res) => {
 
     return res.json(upserted);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
@@ -103,20 +104,20 @@ router.put('/api/boards/:boardId/rules', async (req, res) => {
 // CUSTOM FIELDS
 // ==========================================
 
-router.get('/api/boards/:boardId/fields', async (req, res) => {
+router.get('/api/boards/:boardId/fields', async (req, res, next) => {
   try {
     const db = await getDb();
     const fields = await db.any('SELECT * FROM board_fields WHERE board_id = $1 ORDER BY position ASC', [req.params.boardId]);
     return res.json(fields);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
-router.post('/api/boards/:boardId/fields', async (req, res) => {
+router.post('/api/boards/:boardId/fields', async (req, res, next) => {
   try {
     const { name, type, options, required } = req.body;
-    if (!name || !type) return res.status(400).json({ error: 'name and type are required' });
+    if (!name || !type) throw new AppError('name and type are required', 400);
 
     const db = await getDb();
     
@@ -132,11 +133,11 @@ router.post('/api/boards/:boardId/fields', async (req, res) => {
 
     return res.status(201).json(newField);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
-router.put('/api/boards/:boardId/fields/:fieldId', async (req, res) => {
+router.put('/api/boards/:boardId/fields/:fieldId', async (req, res, next) => {
   try {
     const { name, options, required } = req.body;
     const db = await getDb();
@@ -150,17 +151,17 @@ router.put('/api/boards/:boardId/fields/:fieldId', async (req, res) => {
 
     return res.json(updated);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
-router.delete('/api/boards/:boardId/fields/:fieldId', async (req, res) => {
+router.delete('/api/boards/:boardId/fields/:fieldId', async (req, res, next) => {
   try {
     const db = await getDb();
     await db.none('DELETE FROM board_fields WHERE id = $1 AND board_id = $2', [req.params.fieldId, req.params.boardId]);
     return res.json({ success: true });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 

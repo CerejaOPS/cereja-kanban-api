@@ -1,9 +1,10 @@
 import { Router } from 'express';
+import { AppError } from '../utils/AppError.js';
 import { getDb } from '../lib/db.js';
 
 const router = Router();
 
-router.get('/api/stats', async (req, res) => {
+router.get('/api/stats', async (req, res, next) => {
   try {
     const db = await getDb();
     
@@ -77,7 +78,7 @@ router.get('/api/stats', async (req, res) => {
       }
     });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 

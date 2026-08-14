@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { AppError } from '../utils/AppError.js';
 import { getDb } from '../lib/db.js';
 import { 
   broadcastBoardUpdate, 
@@ -17,20 +18,20 @@ const router = Router();
 // 1. FASES (PHASES)
 // ==========================================
 
-router.get('/api/phases', async (req, res) => {
+router.get('/api/phases', async (req, res, next) => {
   try {
     const db = await getDb();
     const phases = await db.any('SELECT * FROM phases ORDER BY position ASC');
     return res.json(phases);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
-router.post('/api/phases', async (req, res) => {
+router.post('/api/phases', async (req, res, next) => {
   try {
     const { id, name } = req.body;
-    if (!id || !name) return res.status(400).json({ error: 'id and name are required' });
+    if (!id || !name) throw new AppError('id and name are required', 400);
 
     const db = await getDb();
     const row = await db.one('SELECT COALESCE(MAX(position), 0) as max_pos FROM phases');
@@ -44,14 +45,14 @@ router.post('/api/phases', async (req, res) => {
     
     return res.status(201).json(newPhase);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
-router.put('/api/phases/reorder', async (req, res) => {
+router.put('/api/phases/reorder', async (req, res, next) => {
   try {
     const { phases } = req.body;
-    if (!Array.isArray(phases)) return res.status(400).json({ error: 'phases array is required' });
+    if (!Array.isArray(phases)) throw new AppError('phases array is required', 400);
 
     const db = await getDb();
     await db.tx(async t => {
@@ -62,11 +63,11 @@ router.put('/api/phases/reorder', async (req, res) => {
     
     return res.json({ success: true });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
-router.delete('/api/phases/:id', async (req, res) => {
+router.delete('/api/phases/:id', async (req, res, next) => {
   try {
     const { id } = req.params;
     const db = await getDb();
@@ -77,7 +78,7 @@ router.delete('/api/phases/:id', async (req, res) => {
     
     return res.json({ success: true });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
@@ -85,20 +86,20 @@ router.delete('/api/phases/:id', async (req, res) => {
 // 2. LABELS
 // ==========================================
 
-router.get('/api/labels', async (req, res) => {
+router.get('/api/labels', async (req, res, next) => {
   try {
     const db = await getDb();
     const labels = await db.any('SELECT * FROM labels ORDER BY name ASC');
     return res.json(labels);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
-router.post('/api/labels', async (req, res) => {
+router.post('/api/labels', async (req, res, next) => {
   try {
     const { name, color } = req.body;
-    if (!name || !color) return res.status(400).json({ error: 'name and color are required' });
+    if (!name || !color) throw new AppError('name and color are required', 400);
 
     const db = await getDb();
     const newLabel = await db.one(`
@@ -108,11 +109,11 @@ router.post('/api/labels', async (req, res) => {
     `, [name, color]);
     return res.status(201).json(newLabel);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
-router.put('/api/labels/:id', async (req, res) => {
+router.put('/api/labels/:id', async (req, res, next) => {
   try {
     const { id } = req.params;
     const { name, color } = req.body;
@@ -126,17 +127,17 @@ router.put('/api/labels/:id', async (req, res) => {
     
     return res.json(updated);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
-router.delete('/api/labels/:id', async (req, res) => {
+router.delete('/api/labels/:id', async (req, res, next) => {
   try {
     const db = await getDb();
     await db.none('DELETE FROM labels WHERE id = $1', [parseInt(req.params.id)]);
     return res.json({ success: true });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
@@ -144,13 +145,13 @@ router.delete('/api/labels/:id', async (req, res) => {
 // 3. MEMBERS (DISCORD USERS)
 // ==========================================
 
-router.get('/api/members', async (req, res) => {
+router.get('/api/members', async (req, res, next) => {
   try {
     const db = await getDb();
     const users = await db.any('SELECT * FROM discord_users ORDER BY display_name ASC');
     return res.json(users);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
@@ -158,7 +159,7 @@ router.get('/api/members', async (req, res) => {
 // 4. TASKS (GET)
 // ==========================================
 
-router.get('/api/tasks', async (req, res) => {
+router.get('/api/tasks', async (req, res, next) => {
   try {
     const db = await getDb();
     let rawTasks;
@@ -171,18 +172,18 @@ router.get('/api/tasks', async (req, res) => {
     const formatted = await Promise.all(rawTasks.map(t => formatTask(t)));
     return res.json(formatted);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
-router.get('/api/tasks/:id', async (req, res) => {
+router.get('/api/tasks/:id', async (req, res, next) => {
   try {
     const task = await getTaskOrNull(req.params.id);
-    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!task) throw new AppError('Task not found', 404);
     const formatted = await formatTask(task);
     return res.json(formatted);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
@@ -190,10 +191,10 @@ router.get('/api/tasks/:id', async (req, res) => {
 // 5. TASKS (POST, PATCH phase, assign, thread)
 // ==========================================
 
-router.post('/api/tasks', async (req, res) => {
+router.post('/api/tasks', async (req, res, next) => {
   try {
     const { title, phase, assignee_discord_id, labels, board_id } = req.body;
-    if (!title) return res.status(400).json({ error: 'title is required' });
+    if (!title) throw new AppError('title is required', 400);
 
     let assignee_name = null;
     let assignee_email = null;
@@ -244,18 +245,18 @@ router.post('/api/tasks', async (req, res) => {
 
     return res.status(201).json(formatted);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
-router.patch('/api/tasks/:id/phase', async (req, res) => {
+router.patch('/api/tasks/:id/phase', async (req, res, next) => {
   try {
     const { phase } = req.body;
-    if (!phase) return res.status(400).json({ error: 'phase is required' });
+    if (!phase) throw new AppError('phase is required', 400);
 
     const db = await getDb();
     const task = await getTaskOrNull(req.params.id);
-    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!task) throw new AppError('Task not found', 404);
 
     const oldPhase = task.phase;
     if (oldPhase === phase) return res.json({ success: true, task: await formatTask(task) });
@@ -265,12 +266,12 @@ router.patch('/api/tasks/:id/phase', async (req, res) => {
 
     if (rule) {
       if (rule.require_assignee && !task.assignee_discord_id) {
-        return res.status(400).json({ error: `Phase ${phase} requires an assignee.` });
+        throw new AppError(`Phase ${phase} requires an assignee.`, 400);
       }
       if (rule.require_checklist_done) {
         const row = await db.one('SELECT COUNT(*) FROM task_checklists WHERE task_id = $1 AND is_completed = false', [task.id]);
         if (parseInt(row.count) > 0) {
-          return res.status(400).json({ error: `Phase ${phase} requires all checklists to be completed.` });
+          throw new AppError(`Phase ${phase} requires all checklists to be completed.`, 400);
         }
       }
     }
@@ -310,14 +311,14 @@ router.patch('/api/tasks/:id/phase', async (req, res) => {
 
     return res.json({ success: true, task: formatted });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
-router.patch('/api/tasks/:id/assign', async (req, res) => {
+router.patch('/api/tasks/:id/assign', async (req, res, next) => {
   try {
     const { assignee_discord_id } = req.body;
     const task = await getTaskOrNull(req.params.id);
-    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!task) throw new AppError('Task not found', 404);
 
     const db = await getDb();
     let assigneeName = null;
@@ -350,15 +351,15 @@ router.patch('/api/tasks/:id/assign', async (req, res) => {
 
     return res.json({ success: true, task: formatted });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
-router.patch('/api/tasks/:id/thread', async (req, res) => {
+router.patch('/api/tasks/:id/thread', async (req, res, next) => {
   try {
     const { discord_thread_id } = req.body;
     const task = await getTaskOrNull(req.params.id);
-    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!task) throw new AppError('Task not found', 404);
 
     const db = await getDb();
     const updated = await db.one(`
@@ -370,17 +371,17 @@ router.patch('/api/tasks/:id/thread', async (req, res) => {
 
     return res.json({ success: true, task: formatted });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
-router.put('/api/tasks/:id/labels', async (req, res) => {
+router.put('/api/tasks/:id/labels', async (req, res, next) => {
   try {
     const { labels } = req.body;
-    if (!Array.isArray(labels)) return res.status(400).json({ error: 'labels must be an array' });
+    if (!Array.isArray(labels)) throw new AppError('labels must be an array', 400);
 
     const task = await getTaskOrNull(req.params.id);
-    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!task) throw new AppError('Task not found', 404);
 
     const { name: actorName, discordId: actorDiscordId } = actorFromRequest(req, req.body);
     const db = await getDb();
@@ -408,14 +409,14 @@ router.put('/api/tasks/:id/labels', async (req, res) => {
 
     return res.json({ success: true, task: formatted });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
-router.delete('/api/tasks/:id', async (req, res) => {
+router.delete('/api/tasks/:id', async (req, res, next) => {
   try {
     const task = await getTaskOrNull(req.params.id);
-    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!task) throw new AppError('Task not found', 404);
 
     const db = await getDb();
     await db.none('DELETE FROM tasks WHERE id = $1', [task.id]);
@@ -423,7 +424,7 @@ router.delete('/api/tasks/:id', async (req, res) => {
 
     return res.json({ success: true });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
@@ -431,10 +432,10 @@ router.delete('/api/tasks/:id', async (req, res) => {
 // 6. TASKS (Dynamic Save)
 // ==========================================
 
-router.put('/api/tasks/:id', async (req, res) => {
+router.put('/api/tasks/:id', async (req, res, next) => {
   try {
     const task = await getTaskOrNull(req.params.id);
-    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!task) throw new AppError('Task not found', 404);
 
     const { title, description, phase, assignee_discord_id, labels, due_date, fields } = req.body;
     const { name: actorName, discordId: actorDiscordId } = actorFromRequest(req, req.body);
@@ -457,12 +458,12 @@ router.put('/api/tasks/:id', async (req, res) => {
       const rule = await db.oneOrNone('SELECT * FROM phase_rules WHERE board_id = $1 AND phase_id = $2', [task.board_id, phase]);
       if (rule) {
         if (rule.require_assignee && !actualAssigneeId) {
-          return res.status(400).json({ error: `Phase ${phase} requires an assignee.` });
+          throw new AppError(`Phase ${phase} requires an assignee.`, 400);
         }
         if (rule.require_checklist_done) {
           const row = await db.one('SELECT COUNT(*) FROM task_checklists WHERE task_id = $1 AND is_completed = false', [task.id]);
           if (parseInt(row.count) > 0) {
-            return res.status(400).json({ error: `Phase ${phase} requires checklists to be completed.` });
+            throw new AppError(`Phase ${phase} requires checklists to be completed.`, 400);
           }
         }
       }
@@ -527,20 +528,20 @@ router.put('/api/tasks/:id', async (req, res) => {
 
     return res.json({ success: true, task: formatted });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 // ==========================================
 // 8. COMMENTS
 // ==========================================
 
-router.post('/api/tasks/:id/comments', async (req, res) => {
+router.post('/api/tasks/:id/comments', async (req, res, next) => {
   try {
     const { text } = req.body;
-    if (!text) return res.status(400).json({ error: 'text is required' });
+    if (!text) throw new AppError('text is required', 400);
 
     const task = await getTaskOrNull(req.params.id);
-    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!task) throw new AppError('Task not found', 404);
 
     const { name: actorName, discordId: actorDiscordId } = actorFromRequest(req, req.body);
     const db = await getDb();
@@ -559,14 +560,14 @@ router.post('/api/tasks/:id/comments', async (req, res) => {
     broadcastBoardUpdate(task.id, 'commented');
     return res.status(201).json(comment);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
-router.put('/api/tasks/:id/comments/:commentId', async (req, res) => {
+router.put('/api/tasks/:id/comments/:commentId', async (req, res, next) => {
   try {
     const { text } = req.body;
-    if (!text) return res.status(400).json({ error: 'text is required' });
+    if (!text) throw new AppError('text is required', 400);
 
     const db = await getDb();
     const updated = await db.one(`
@@ -578,11 +579,11 @@ router.put('/api/tasks/:id/comments/:commentId', async (req, res) => {
     broadcastBoardUpdate(req.params.id, 'comment_edited');
     return res.json(updated);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
-router.delete('/api/tasks/:id/comments/:commentId', async (req, res) => {
+router.delete('/api/tasks/:id/comments/:commentId', async (req, res, next) => {
   try {
     const { name: actorName } = actorFromRequest(req, req.body);
     const db = await getDb();
@@ -595,11 +596,11 @@ router.delete('/api/tasks/:id/comments/:commentId', async (req, res) => {
     broadcastBoardUpdate(req.params.id, 'comment_deleted');
     return res.json({ success: true });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
-router.patch('/api/tasks/:id/comments/:commentId/pin', async (req, res) => {
+router.patch('/api/tasks/:id/comments/:commentId/pin', async (req, res, next) => {
   try {
     const { isPinned } = req.body;
     const db = await getDb();
@@ -610,7 +611,7 @@ router.patch('/api/tasks/:id/comments/:commentId/pin', async (req, res) => {
     broadcastBoardUpdate(req.params.id, 'comment_pinned');
     return res.json(updated);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
@@ -618,11 +619,11 @@ router.patch('/api/tasks/:id/comments/:commentId/pin', async (req, res) => {
 // 10. TIME
 // ==========================================
 
-router.post('/api/tasks/:id/time', async (req, res) => {
+router.post('/api/tasks/:id/time', async (req, res, next) => {
   try {
     const { minutes, note, phase, source } = req.body;
     const task = await getTaskOrNull(req.params.id);
-    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!task) throw new AppError('Task not found', 404);
 
     const { name: actorName, discordId: actorDiscordId } = actorFromRequest(req, req.body);
 
@@ -639,7 +640,7 @@ router.post('/api/tasks/:id/time', async (req, res) => {
     broadcastBoardUpdate(task.id, 'time_logged');
     return res.status(201).json(entry || { success: true, ignored: true });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
@@ -647,13 +648,13 @@ router.post('/api/tasks/:id/time', async (req, res) => {
 // 11. OBSERVATIONS
 // ==========================================
 
-router.post('/api/tasks/:id/observations', async (req, res) => {
+router.post('/api/tasks/:id/observations', async (req, res, next) => {
   try {
     const { text, time_spent_minutes, phase } = req.body;
-    if (!text) return res.status(400).json({ error: 'text is required' });
+    if (!text) throw new AppError('text is required', 400);
 
     const task = await getTaskOrNull(req.params.id);
-    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!task) throw new AppError('Task not found', 404);
 
     const { name: actorName, discordId: actorDiscordId } = actorFromRequest(req, req.body);
     const db = await getDb();
@@ -687,11 +688,11 @@ router.post('/api/tasks/:id/observations', async (req, res) => {
     broadcastBoardUpdate(task.id, 'observation_added');
     return res.status(201).json({ success: true });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
-router.delete('/api/tasks/:id/observations/:obsId', async (req, res) => {
+router.delete('/api/tasks/:id/observations/:obsId', async (req, res, next) => {
   try {
     const { name: actorName } = actorFromRequest(req, req.body);
     const db = await getDb();
@@ -703,7 +704,7 @@ router.delete('/api/tasks/:id/observations/:obsId', async (req, res) => {
     broadcastBoardUpdate(req.params.id, 'observation_deleted');
     return res.json({ success: true });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
@@ -711,11 +712,11 @@ router.delete('/api/tasks/:id/observations/:obsId', async (req, res) => {
 // 12. OWNERSHIP (Active Owner)
 // ==========================================
 
-router.post('/api/tasks/:id/take', async (req, res) => {
+router.post('/api/tasks/:id/take', async (req, res, next) => {
   try {
     const task = await getTaskOrNull(req.params.id);
-    if (!task) return res.status(404).json({ error: 'Task not found' });
-    if (task.active_owner_discord_id) return res.status(400).json({ error: 'Task already taken' });
+    if (!task) throw new AppError('Task not found', 404);
+    if (task.active_owner_discord_id) throw new AppError('Task already taken', 400);
 
     const { name: actorName, discordId: actorDiscordId } = actorFromRequest(req, req.body);
     const db = await getDb();
@@ -737,22 +738,22 @@ router.post('/api/tasks/:id/take', async (req, res) => {
     broadcastBoardUpdate(task.id, 'taken');
     return res.json({ success: true });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
-router.post('/api/tasks/:id/release', async (req, res) => {
+router.post('/api/tasks/:id/release', async (req, res, next) => {
   try {
     const { minutes, note, phase } = req.body;
     const task = await getTaskOrNull(req.params.id);
-    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!task) throw new AppError('Task not found', 404);
     if (!task.active_owner_discord_id) return res.json({ success: true });
 
     const { name: actorName, discordId: actorDiscordId } = actorFromRequest(req, req.body);
     const isSelf = task.active_owner_discord_id === actorDiscordId;
 
     if (!isSelf && !isAdminRequest(req)) {
-      return res.status(403).json({ error: 'Not authorized to release' });
+      throw new AppError('Not authorized to release', 403);
     }
 
     const m = Math.max(0, parseFloat(minutes) || 0);
@@ -780,7 +781,7 @@ router.post('/api/tasks/:id/release', async (req, res) => {
     broadcastBoardUpdate(task.id, 'released');
     return res.json({ success: true });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
@@ -788,13 +789,13 @@ router.post('/api/tasks/:id/release', async (req, res) => {
 // 13. CHECKLISTS
 // ==========================================
 
-router.post('/api/tasks/:id/checklists', async (req, res) => {
+router.post('/api/tasks/:id/checklists', async (req, res, next) => {
   try {
     const { title, description } = req.body;
-    if (!title) return res.status(400).json({ error: 'title is required' });
+    if (!title) throw new AppError('title is required', 400);
 
     const task = await getTaskOrNull(req.params.id);
-    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!task) throw new AppError('Task not found', 404);
 
     const { name: actorName, discordId: actorDiscordId } = actorFromRequest(req, req.body);
     const db = await getDb();
@@ -820,18 +821,18 @@ router.post('/api/tasks/:id/checklists', async (req, res) => {
     broadcastBoardUpdate(task.id, 'checklist_created');
     return res.status(201).json(checklist);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
-router.put('/api/tasks/:id/checklists/:checklistId', async (req, res) => {
+router.put('/api/tasks/:id/checklists/:checklistId', async (req, res, next) => {
   try {
     const { title, description, status, assignee_discord_id, is_completed } = req.body;
     const clId = parseInt(req.params.checklistId);
     
     const db = await getDb();
     const oldCl = await db.oneOrNone('SELECT * FROM task_checklists WHERE id = $1', [clId]);
-    if (!oldCl || String(oldCl.task_id) !== String(req.params.id)) return res.status(404).json({ error: 'Checklist not found' });
+    if (!oldCl || String(oldCl.task_id) !== String(req.params.id)) throw new AppError('Checklist not found', 404);
 
     const task = await getTaskOrNull(req.params.id);
     const { name: actorName, discordId: actorDiscordId } = actorFromRequest(req, req.body);
@@ -908,14 +909,14 @@ router.put('/api/tasks/:id/checklists/:checklistId', async (req, res) => {
     broadcastBoardUpdate(task.id, 'checklist_updated');
     return res.json(updated);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
-router.post('/api/tasks/:id/checklists/:checklistId/comments', async (req, res) => {
+router.post('/api/tasks/:id/checklists/:checklistId/comments', async (req, res, next) => {
   try {
     const { text } = req.body;
-    if (!text) return res.status(400).json({ error: 'text is required' });
+    if (!text) throw new AppError('text is required', 400);
 
     const { name: actorName, discordId: actorDiscordId } = actorFromRequest(req, req.body);
     const db = await getDb();
@@ -929,18 +930,18 @@ router.post('/api/tasks/:id/checklists/:checklistId/comments', async (req, res) 
     broadcastBoardUpdate(req.params.id, 'checklist_commented');
     return res.status(201).json(comment);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
-router.delete('/api/tasks/:id/checklists/:checklistId', async (req, res) => {
+router.delete('/api/tasks/:id/checklists/:checklistId', async (req, res, next) => {
   try {
     const db = await getDb();
     await db.none('DELETE FROM task_checklists WHERE id = $1', [parseInt(req.params.checklistId)]);
     broadcastBoardUpdate(req.params.id, 'checklist_deleted');
     return res.json({ success: true });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
@@ -948,7 +949,7 @@ router.delete('/api/tasks/:id/checklists/:checklistId', async (req, res) => {
 // 14. ACTIVITY LOG & EXPORT
 // ==========================================
 
-router.get('/api/activity', async (req, res) => {
+router.get('/api/activity', async (req, res, next) => {
   try {
     const limit = parseInt(req.query.limit) || 50;
     const offset = parseInt(req.query.offset) || 0;
@@ -971,7 +972,7 @@ router.get('/api/activity', async (req, res) => {
 
     return res.json(shaped);
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return next(error);
   }
 });
 
