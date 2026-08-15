@@ -157,6 +157,14 @@ router.get('/auth/discord/callback', async (req, res, next) => {
     });
 
     const discordUser = userResponse.data;
+    
+    // Convert Discord avatar hash to full CDN URL
+    let avatarUrl = null;
+    if (discordUser.avatar) {
+      const ext = discordUser.avatar.startsWith('a_') ? 'gif' : 'png';
+      avatarUrl = `https://cdn.discordapp.com/avatars/${discordUser.id}/${discordUser.avatar}.${ext}`;
+    }
+
     const db = await getDb();
 
     let user = await db.oneOrNone('SELECT * FROM discord_users WHERE id = $1', [discordUser.id]);
@@ -166,7 +174,7 @@ router.get('/auth/discord/callback', async (req, res, next) => {
         INSERT INTO discord_users (id, display_name, email, avatar_url, discord_role)
         VALUES ($1, $2, $3, $4, $5)
         RETURNING *
-      `, [discordUser.id, discordUser.global_name || discordUser.username, discordUser.email || null, discordUser.avatar || null, 'member']);
+      `, [discordUser.id, discordUser.global_name || discordUser.username, discordUser.email || null, avatarUrl, 'member']);
     } else {
       user = await db.one(`
         UPDATE discord_users SET
@@ -176,7 +184,7 @@ router.get('/auth/discord/callback', async (req, res, next) => {
           updated_at = CURRENT_TIMESTAMP
         WHERE id = $1
         RETURNING *
-      `, [discordUser.id, discordUser.global_name || discordUser.username, discordUser.email || null, discordUser.avatar || null]);
+      `, [discordUser.id, discordUser.global_name || discordUser.username, discordUser.email || null, avatarUrl]);
     }
 
     const token = jwt.sign(
