@@ -21,6 +21,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+let lastBotHeartbeat = null;
 
 // Documentação da API com Swagger
 const swaggerDocument = YAML.load(path.join(__dirname, 'openapi.yaml'));
@@ -86,6 +87,31 @@ app.get('/health', (req, res) => {
   return res.json({
     status: 'ok',
     timestamp: new Date().toISOString()
+  });
+});
+
+// Bot Heartbeat
+app.post('/api/bot/heartbeat', (req, res) => {
+  lastBotHeartbeat = new Date();
+  res.json({ success: true, timestamp: lastBotHeartbeat });
+});
+
+app.get('/api/bot/status', (req, res) => {
+  if (!lastBotHeartbeat) {
+    return res.json({ online: false, message: "Bot nunca deu sinal de vida" });
+  }
+  
+  // Calcula a diferença em segundos entre agora e o último heartbeat
+  const now = new Date();
+  const diffInSeconds = (now - lastBotHeartbeat) / 1000;
+  
+  // Se faz menos de 60 segundos, ele tá online!
+  const isOnline = diffInSeconds < 60;
+  
+  res.json({ 
+    online: isOnline, 
+    lastSeen: lastBotHeartbeat,
+    secondsAgo: Math.floor(diffInSeconds)
   });
 });
 
