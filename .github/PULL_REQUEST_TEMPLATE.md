@@ -1,19 +1,21 @@
-## O que este PR faz?
+## 📝 Descrição
+<!-- Descreva brevemente o que este PR faz. Qual é o objetivo principal? -->
 
-<!-- Descreva brevemente as mudanças feitas neste Pull Request -->
+## 🔗 Link da Tarefa (Jira)
+<!-- Coloque o código ou o nome da tarefa do Jira aqui -->
+- Task: 
 
-## Qual problema isso resolve?
+## 🏗️ Tipo de Alteração
+- [ ] 🚀 Nova funcionalidade (`feat`)
+- [ ] 🐛 Correção de Bug (`fix`)
+- [ ] 🛠️ Refatoração / Limpeza (`refactor` / `chore`)
+- [ ] ⚙️ Alteração Estratégica (Arquitetura, Banco de Dados, Integração)
 
-<!-- Link para a issue ou descrição do problema -->
+## ✅ Checklist do Desenvolvedor
+- [ ] Meu código segue as diretrizes da Clean Architecture / FSD definidas no Guia Técnico.
+- [ ] Rodei o projeto localmente e a alteração está funcionando.
+- [ ] O título do PR e os commits seguem o padrão (ex: `feat: adiciona modal de perfil`).
+- [ ] Se eu criei uma interface sem o backend pronto, coloquei o aviso de `// TODO: MOCK TEMPORÁRIO`.
 
-## Checklist
-
-- [ ] Meu código segue a arquitetura do projeto (FSD no Frontend, Clean Arch no Backend).
-- [ ] O código foi formatado com o Prettier antes do commit.
-- [ ] Eu testei as mudanças localmente.
-- [ ] A integração com o Discord (webhook) continua funcionando (se aplicável).
-- [ ] As variáveis de ambiente não foram expostas (verifique o `.env`).
-
-## Notas para os revisores
-
-<!-- Adicione qualquer contexto útil para quem for revisar seu código -->
+## ⚠️ Atenção (Apenas para o PM)
+- [ ] Este é um PR Estratégico e exige revisão aprofundada do PM antes de ser aprovado.
