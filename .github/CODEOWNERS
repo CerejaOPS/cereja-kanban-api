@@ -1,0 +1,14 @@
+# Propriedade de Código (CODEOWNERS)
+# Este arquivo define quem são os responsáveis (donos) por aprovar alterações
+# em arquivos críticos e sensíveis do repositório.
+
+# Regras da Inteligência Artificial e Guardrails
+.cursorrules @agbram
+.windsurfrules @agbram
+
+# Documentação Oficial e Contexto
+docs/CONTEXTO_SISTEMA.md @agbram
+docs/GUIA_USO_IA.md @agbram
+
+# Templates de Organização
+.github/PULL_REQUEST_TEMPLATE.md @agbram
