@@ -1,67 +1,84 @@
-# 🍒 Cereja Kanban API
+# 🍒 Cereja Kanban — API (Backend)
 
-A API REST oficial do ecossistema Cereja. Responsável por toda a lógica de negócio do sistema Kanban, integração com o banco de dados e comunicação em tempo real com o Frontend e o Bot do Discord.
-
-> ⚠️ **Em Refatoração:** Este projeto foi originalmente construído em **Node.js (Express)**. Estamos migrando toda a base de código para **Java (Spring Boot 3.x)** com Clean Architecture. O código legado em Node ainda está presente no repositório e será gradualmente substituído pelas novas implementações em Java. As rotas da API, o banco de dados (PostgreSQL) e as integrações (SSE, Webhooks) permanecerão os mesmos — apenas a linguagem e a estrutura interna mudarão.
-## 🛠️ Tecnologias Principais
-
-*   **Linguagem:** Java 17+
-*   **Framework:** Spring Boot 3.x
-*   **Banco de Dados:** PostgreSQL (via Spring Data JPA / Hibernate)
-*   **Migrações:** Flyway
-*   **Documentação:** Swagger / springdoc-openapi
-*   **Containerização:** Docker Compose (PostgreSQL)
+API REST do Cereja Kanban, construída com **Java 17**, **Spring Boot** e **Clean Architecture**.
 
 ## 🏗️ Arquitetura
 
-Este projeto segue o padrão **Clean Architecture**, dividido em camadas:
+O projeto segue rigorosamente os princípios da **Clean Architecture**, separando responsabilidades em 4 camadas:
 
-```text
-src/main/java/com/cereja/api/
- ├── controller/       → @RestController (recebe requisições HTTP)
- ├── service/          → @Service (regras de negócio / Use Cases)
- ├── repository/       → @Repository (acesso ao banco de dados)
- ├── model/            → @Entity (entidades do domínio: Task, Phase, Label)
- ├── dto/              → Data Transfer Objects (entrada e saída da API)
- ├── exception/        → AppException + GlobalExceptionHandler
- └── config/           → Configurações (CORS, SSE, Swagger)
+```
+src/main/java/com/cereja/kanban/
+├── domain/          → Entidades puras (POJOs) e interfaces de repositório
+├── application/     → Services com regras de negócio
+├── infrastructure/  → Entidades JPA, Adapters, integrações externas
+└── presentation/    → Controllers REST e DTOs
 ```
 
-## 🔌 Integrações
+> **Regra de Ouro:** O `domain` nunca importa nada do Spring ou JPA. As dependências vão de fora para dentro.
 
-| Integração | Descrição |
-| :--- | :--- |
-| **SSE (Server-Sent Events)** | Atualiza o quadro Kanban em tempo real para todos os usuários conectados. |
-| **Webhooks → Discord Bot** | Dispara notificações HTTP para o Bot sempre que uma task é criada, movida ou concluída. |
-| **Swagger UI** | Documentação interativa da API acessível em `/swagger-ui.html`. |
+## ⚙️ Pré-requisitos
 
-## 🚀 Como Executar Localmente
+- **Java 17** (ou superior)
+- **Maven** (já incluso via `mvnw`)
+- **PostgreSQL** rodando na porta 5432
+- **Node.js** (necessário apenas para o Husky/Commitlint que valida os commits)
 
-### Pré-requisitos
-*   Java 17+ (JDK)
-*   Maven ou Gradle
-*   Docker (para subir o PostgreSQL)
+## 🚀 Como rodar o projeto
 
-### Passo a passo
-1. Clone este repositório.
-2. Suba o banco de dados com Docker:
-   ```bash
-   docker compose up -d
-   ```
-3. Execute a aplicação:
-   ```bash
-   ./mvnw spring-boot:run
-   ```
-   Ou, se usar Gradle:
-   ```bash
-   ./gradlew bootRun
-   ```
-4. Acesse a documentação da API em `http://localhost:8080/swagger-ui.html`.
+### 1. Clone o repositório
+```bash
+git clone https://github.com/CerejaOPS/cereja-kanban-api.git
+cd cereja-kanban-api
+```
 
-## 📂 Referências Internas
+### 2. Troque para a branch de integração
+```bash
+git checkout rc
+git pull origin rc
+```
 
-*   **`_templates/`** → Contém exemplos didáticos da arquitetura (Entities, Use Cases, Repositories e Routes) que servem como modelo para a equipe.
-*   **`docker-compose.yml`** → Sobe uma instância do PostgreSQL 16 automaticamente.
+### 3. Configure o banco de dados
+Copie o arquivo de ambiente e preencha suas credenciais do PostgreSQL:
+```bash
+cp .env.example .env
+```
 
-## 🏗️ Padrões da Equipe
-Este projeto utiliza **Husky** e **Prettier** (para arquivos de configuração). O código Java deve seguir as convenções padrão do Spring Boot. Certifique-se de ler o arquivo `CONTRIBUTING.md` para entender as regras de pull requests e nomenclatura de branches.
+### 4. Instale as dependências do Husky (trava de commits)
+```bash
+npm install
+```
+
+### 5. Rode o projeto
+```bash
+./mvnw spring-boot:run
+```
+Ou, se estiver no Windows:
+```bash
+mvnw.cmd spring-boot:run
+```
+
+A API estará disponível em `http://localhost:8080`.
+
+## 📐 Padrão de Commits
+
+Este repositório utiliza **Conventional Commits** com validação automática via Husky. Seus commits devem seguir o padrão:
+
+```
+feat: adiciona endpoint de criação de tasks
+fix: corrige validação de transição de fase
+chore: atualiza dependências do pom.xml
+docs: atualiza documentação da API
+```
+
+## 📚 Documentação Interna
+
+- [`docs/CONTEXTO_SISTEMA.md`](docs/CONTEXTO_SISTEMA.md) — Contexto histórico e mapa das features.
+- [`docs/GUIA_USO_IA.md`](docs/GUIA_USO_IA.md) — Como usar a IA (Cursor/Windsurf) corretamente neste projeto.
+
+## 🤝 Contribuindo
+
+1. Puxe a branch mais recente: `git checkout rc && git pull`
+2. Crie sua branch: `git checkout -b feat/nome-da-feature`
+3. Desenvolva e commite seguindo o padrão.
+4. Abra um **Pull Request** apontando para a branch `rc`.
+5. Aguarde a aprovação do PM antes de mergear.
