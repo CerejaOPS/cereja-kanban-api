@@ -15,8 +15,8 @@ public class Task {
     private Long id;
     private String title;
     private String description;
-    private String phase; //(ex: "backlog", "todo", "andamento", "revisão", "concluído")
-    private String priority; //(ex: "baixa", "media", "alta", "urgente")
+    private TaskPhase phase;
+    private TaskPriority priority;
     private Long boardId;
     private String assigneeDiscordId;
     private LocalDateTime createdAt;
