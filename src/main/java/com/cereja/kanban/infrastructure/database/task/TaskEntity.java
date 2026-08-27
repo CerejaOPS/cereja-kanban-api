@@ -1,4 +1,4 @@
-package com.cereja.kanban.infraestructure.database.task;
+package com.cereja.kanban.infrastructure.database.task;
 
 import com.cereja.kanban.domain.Board.Board;
 import com.cereja.kanban.domain.Task.TaskPhase;
@@ -32,5 +32,18 @@ public class TaskEntity {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private TaskPhase phase;
-    
+
+    @Column(name = "board_id", nullable = false)
+    private Long boardId;
+
+    @Column(name = "assignee_discord_id")
+    private String assigneeDiscordId;
+
+    @org.hibernate.annotations.CreationTimestamp
+    @Column(name = "created_at", updatable = false)
+    private java.time.LocalDateTime createdAt;
+
+    @org.hibernate.annotations.UpdateTimestamp
+    @Column(name = "updated_at")
+    private java.time.LocalDateTime updatedAt;
 }

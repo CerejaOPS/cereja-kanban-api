@@ -29,6 +29,7 @@ public class TaskRepositoryAdapter implements ITaskRepository {
         entity.setBoardId(task.getBoardId());
         entity.setAssigneeDiscordId(task.getAssigneeDiscordId());
 
+
         // 2. Salva no banco de dados usando o repositório do Spring
         TaskEntity savedEntity = springDataRepository.save(entity);
 
@@ -46,6 +47,8 @@ public class TaskRepositoryAdapter implements ITaskRepository {
         task.setPhase(entity.getPhase());
         task.setBoardId(entity.getBoardId());
         task.setAssigneeDiscordId(entity.getAssigneeDiscordId());
+        task.setCreatedAt(entity.getCreatedAt());
+        task.setUpdatedAt(entity.getUpdatedAt());
         return task;
     }
 
@@ -65,7 +68,4 @@ public class TaskRepositoryAdapter implements ITaskRepository {
     public void deleteById(Long id){
         springDataRepository.deleteById(id);
     }
-
-    // TODO: Agora é com você! Tente implementar os outros métodos obrigatórios do ITaskRepository
-    // Ex: buscarPorId, listarTodas, deletar...
 }

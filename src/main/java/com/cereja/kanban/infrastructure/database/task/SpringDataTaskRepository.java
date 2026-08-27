@@ -1,4 +1,6 @@
 package com.cereja.kanban.infrastructure.database.task;
 
-public interface SpringDataTaskRepository {
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface SpringDataTaskRepository extends JpaRepository<TaskEntity, Long> {
 }
