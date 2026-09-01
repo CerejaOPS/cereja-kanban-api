@@ -1,0 +1,29 @@
+[2026-08-27 19:21:30] ERROR: [postgres] Failed to run migrations: You must provide either a databaseUrl or a dbClient
+[2026-08-27 19:21:30] ERROR: [postgres] Failed to connect: You must provide either a databaseUrl or a dbClient
+[2026-08-27 19:21:30] ERROR: ❌ Erro ao conectar no Postgres: You must provide either a databaseUrl or a dbClient
+Error: You must provide either a databaseUrl or a dbClient
+    at runner (file:///C:/Users/Andr%C3%A9%20Silva/Desktop/cereja-kanban-api/node_modules/node-pg-migrate/dist/bundle/index.js:3565:32)
+    at PostgresConnection.runMigrations (file:///C:/Users/Andr%C3%A9%20Silva/Desktop/cereja-kanban-api/lib/db.js:76:40)
+    at PostgresConnection.connectTo (file:///C:/Users/Andr%C3%A9%20Silva/Desktop/cereja-kanban-api/lib/db.js:69:18)
+    at PostgresConnection.getConnection (file:///C:/Users/Andr%C3%A9%20Silva/Desktop/cereja-kanban-api/lib/db.js:38:26)
+    at getDb (file:///C:/Users/Andr%C3%A9%20Silva/Desktop/cereja-kanban-api/lib/db.js:106:41)
+    at file:///C:/Users/Andr%C3%A9%20Silva/Desktop/cereja-kanban-api/server.js:135:1
+    at ModuleJob.run (node:internal/modules/esm/module_job:437:25)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async node:internal/modules/esm/loader:639:26
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+[2026-08-27 19:21:40] ERROR: [postgres] Failed to run migrations: You must provide either a databaseUrl or a dbClient
+[2026-08-27 19:21:40] ERROR: [postgres] Failed to connect: You must provide either a databaseUrl or a dbClient
+[2026-08-27 19:21:40] ERROR: [UNHANDLED ERROR] Error: You must provide either a databaseUrl or a dbClient
+Stack: Error: You must provide either a databaseUrl or a dbClient
+    at runner (file:///C:/Users/Andr%C3%A9%20Silva/Desktop/cereja-kanban-api/node_modules/node-pg-migrate/dist/bundle/index.js:3565:32)
+    at PostgresConnection.runMigrations (file:///C:/Users/Andr%C3%A9%20Silva/Desktop/cereja-kanban-api/lib/db.js:76:40)
+    at PostgresConnection.connectTo (file:///C:/Users/Andr%C3%A9%20Silva/Desktop/cereja-kanban-api/lib/db.js:69:18)
+    at PostgresConnection.getConnection (file:///C:/Users/Andr%C3%A9%20Silva/Desktop/cereja-kanban-api/lib/db.js:38:26)
+    at getDb (file:///C:/Users/Andr%C3%A9%20Silva/Desktop/cereja-kanban-api/lib/db.js:106:41)
+    at file:///C:/Users/Andr%C3%A9%20Silva/Desktop/cereja-kanban-api/routes/boards.js:13:22
+    at Layer.handle [as handle_request] (C:\Users\André Silva\Desktop\cereja-kanban-api\node_modules\express\lib\router\layer.js:95:5)
+    at next (C:\Users\André Silva\Desktop\cereja-kanban-api\node_modules\express\lib\router\route.js:149:13)
+    at Route.dispatch (C:\Users\André Silva\Desktop\cereja-kanban-api\node_modules\express\lib\router\route.js:119:3)
+    at Layer.handle [as handle_request] (C:\Users\André Silva\Desktop\cereja-kanban-api\node_modules\express\lib\router\layer.js:95:5)
+[2026-08-27 19:21:40] ERROR: GET /api/boards - 500 - 37ms
