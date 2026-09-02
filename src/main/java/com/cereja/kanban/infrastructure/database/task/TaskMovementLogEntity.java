@@ -5,8 +5,11 @@ import lombok.*;
 
 import java.time.LocalDateTime;
 
+import com.cereja.kanban.domain.Task.TaskPhase;
+
 /**
- * Entidade JPA que representa a tabela de log de movimentação de tarefas no banco de dados.
+ * Entidade JPA que representa a tabela de log de movimentação de tarefas no
+ * banco de dados.
  * Cada registro representa uma transição de fase de uma tarefa específica.
  */
 @Entity
@@ -27,12 +30,14 @@ public class TaskMovementLogEntity {
     private Long taskId;
 
     /** Nome da fase de origem antes da movimentação. */
+    @Enumerated(EnumType.STRING)
     @Column(name = "fase_anterior", nullable = false, length = 50)
-    private String faseAnterior;
+    private TaskPhase faseAnterior;
 
     /** Nome da fase de destino após a movimentação. */
+    @Enumerated(EnumType.STRING)
     @Column(name = "fase_nova", nullable = false, length = 50)
-    private String faseNova;
+    private TaskPhase faseNova;
 
     /** Identificador de quem acionou a movimentação (ex: Discord ID ou nome). */
     @Column(name = "movido_por", length = 100)

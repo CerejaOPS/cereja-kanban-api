@@ -7,6 +7,8 @@ import lombok.Setter;
 
 import java.time.LocalDateTime;
 
+import com.cereja.kanban.domain.Task.TaskPhase;
+
 @Getter
 @Setter
 @NoArgsConstructor

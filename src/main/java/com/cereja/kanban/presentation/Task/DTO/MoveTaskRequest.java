@@ -1,6 +1,8 @@
 package com.cereja.kanban.presentation.Task.DTO;
 
+import com.cereja.kanban.domain.Task.TaskPhase;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -20,8 +22,8 @@ import lombok.Setter;
 @NoArgsConstructor
 public class MoveTaskRequest {
 
-    @NotBlank(message = "A fase de destino é obrigatória")
-    private String phase;
+    @NotNull(message = "A fase de destino é obrigatória")
+    private TaskPhase phase;
 
     @NotBlank(message = "O responsável pela movimentação é obrigatório")
     private String movedBy;

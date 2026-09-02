@@ -1,5 +1,6 @@
 package com.cereja.kanban.infrastructure.database.task;
 
+import com.cereja.kanban.domain.Task.TaskPhase;
 import com.cereja.kanban.domain.TaskMovementLog;
 import com.cereja.kanban.domain.TaskMovementLogRepository;
 import org.springframework.stereotype.Component;
@@ -36,8 +37,8 @@ public class LogRepositoryAdapter implements TaskMovementLogRepository {
         // 1. Converte o objeto de domínio para a entidade JPA
         TaskMovementLogEntity entity = new TaskMovementLogEntity();
         entity.setTaskId(log.getTaskId());
-        entity.setFaseAnterior(log.getFaseAnterior());
-        entity.setFaseNova(log.getFaseNova());
+        entity.setFaseAnterior(TaskPhase.valueOf(log.getFaseAnterior()));
+        entity.setFaseNova(TaskPhase.valueOf(log.getFaseNova()));
         entity.setMovidoPor(log.getMovidoPor());
         entity.setMovidoEm(log.getMovidoEm());
 
