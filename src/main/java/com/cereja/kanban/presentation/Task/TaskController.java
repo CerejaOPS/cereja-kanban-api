@@ -3,7 +3,7 @@ package com.cereja.kanban.presentation.Task;
 import com.cereja.kanban.application.Task.MoveTaskUseCase;
 import com.cereja.kanban.application.Task.TaskService;
 import com.cereja.kanban.domain.Task.Task;
-import com.cereja.kanban.dto.MoveTaskRequest;
+import com.cereja.kanban.presentation.Task.DTO.MoveTaskRequest;
 import com.cereja.kanban.presentation.Task.DTO.CreateTaskRequest;
 import com.cereja.kanban.presentation.Task.DTO.TaskResponse;
 import jakarta.validation.Valid;
@@ -138,9 +138,16 @@ public class TaskController {
     }
 
 
-    // Nosso novo método de mover tarefas!
-    @PutMapping("/{taskId}/mover")
-    public void moverTask(@PathVariable Long taskId, @RequestBody MoveTaskRequest request) {
-        exibeTask.execute(taskId, request.getNovaFase(), request.getMovidoPor());
+    /**
+     * Move uma tarefa para uma nova fase do Kanban.
+     * Retorna 204 No Content em caso de sucesso.
+     *
+     * @param id      ID da tarefa a ser movida.
+     * @param request Corpo da requisição com a fase de destino e o responsável.
+     */
+    @PatchMapping("/{id}/move")
+    public ResponseEntity<Void> moverTask(@PathVariable Long id, @Valid @RequestBody MoveTaskRequest request) {
+        exibeTask.execute(id, request.getPhase(), request.getMovedBy());
+        return ResponseEntity.noContent().build();
     }
 }
