@@ -17,12 +17,12 @@ public class TaskMovementLog {
 
     private Long id;
     private Long taskId;
-    private String faseAnterior;
-    private String faseNova;
+    private TaskPhase faseAnterior;
+    private TaskPhase faseNova;
     private String movidoPor;
     private LocalDateTime movidoEm;
 
-    public TaskMovementLog(Long taskId, String faseAnterior, String faseNova, String movidoPor, LocalDateTime movidoEm) {
+    public TaskMovementLog(Long taskId, TaskPhase faseAnterior, TaskPhase faseNova, String movidoPor, LocalDateTime movidoEm) {
         this.taskId = taskId;
         this.faseAnterior = faseAnterior;
         this.faseNova = faseNova;
