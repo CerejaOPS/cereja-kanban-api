@@ -8,4 +8,5 @@ public interface ITaskRepository {
     List<Task> findAll();
     Optional<Task> findById(Long id);
     void deleteById(Long id);
+    List<Task> findByBoardId(Long boardId);
 }

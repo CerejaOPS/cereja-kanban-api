@@ -68,4 +68,15 @@ public class TaskRepositoryAdapter implements ITaskRepository {
     public void deleteById(Long id){
         springDataRepository.deleteById(id);
     }
+
+    @Override
+    public List<Task> findByBoardId(Long boardId){
+
+        return springDataRepository.findByBoardId(boardId)
+                .stream()
+                .map(this::converterParaDominio)
+                .toList();
+
+    }
+
 }

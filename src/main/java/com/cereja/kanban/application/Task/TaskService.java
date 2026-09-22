@@ -58,4 +58,15 @@ public class TaskService {
 
         taskRepository.deleteById(id);
         }
+
+    public List<Task> findByBoardId(Long boardId){
+
+        return taskRepository.findByBoardId(boardId);
+
     }
+
+
+
+
+
+}
