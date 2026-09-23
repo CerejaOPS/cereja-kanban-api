@@ -5,4 +5,5 @@ import org.springframework.stereotype.Repository;
 
 @Repository
 public interface SpringDataTaskRepository extends JpaRepository<TaskEntity, Long> {
+    List<TaskEntity> findByBoardId(Long boardId);
 }
