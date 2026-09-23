@@ -29,6 +29,9 @@ public class TaskRepositoryAdapter implements ITaskRepository {
         entity.setBoardId(task.getBoardId());
         entity.setAssigneeDiscordId(task.getAssigneeDiscordId());
 
+        entity.setCreatedAt(task.getCreatedAt());
+        entity.setUpdatedAt(task.getUpdatedAt());
+
 
         // 2. Salva no banco de dados usando o repositório do Spring
         TaskEntity savedEntity = springDataRepository.save(entity);

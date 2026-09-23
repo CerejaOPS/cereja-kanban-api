@@ -1,5 +1,6 @@
 package com.cereja.kanban.application.Board;
 
+import com.cereja.kanban.application.exception.ResourceNotFoundException;
 import com.cereja.kanban.domain.Board.Board;
 import com.cereja.kanban.domain.Board.IBoardRepository;
 import org.springframework.stereotype.Service;
@@ -30,7 +31,7 @@ public class BoardService {
     //busca um board pelo ID
     public Board findById(Long id){
         return boardRepository.findById(id).orElseThrow(()->
-                new RuntimeException("Board não encontrado com o id: "+id));
+                new ResourceNotFoundException("Board não encontrado com o id: "+id));
     }
 
 
