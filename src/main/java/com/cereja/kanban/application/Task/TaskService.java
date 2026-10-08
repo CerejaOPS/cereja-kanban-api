@@ -1,5 +1,6 @@
 package com.cereja.kanban.application.Task;
 
+import com.cereja.kanban.application.exception.ResourceNotFoundException;
 import com.cereja.kanban.domain.Task.ITaskRepository;
 import com.cereja.kanban.domain.Task.Task;
 import com.cereja.kanban.domain.Task.TaskPhase;
@@ -36,7 +37,7 @@ public class TaskService {
 
     // 3. Buscar por ID (Com regra de negócio de "Não Encontrado")
     public Task findById(Long id) {
-        return taskRepository.findById(id).orElseThrow(() -> new RuntimeException("Task não encontrada ou não existe"));
+        return taskRepository.findById(id).orElseThrow(() -> new ResourceNotFoundException("Task não encontrada ou não existe"));
     }
 
     public Task update(Long id, Task dadosAtualizados) {
@@ -58,4 +59,15 @@ public class TaskService {
 
         taskRepository.deleteById(id);
         }
+
+    public List<Task> findByBoardId(Long boardId){
+
+        return taskRepository.findByBoardId(boardId);
+
     }
+
+
+
+
+
+}

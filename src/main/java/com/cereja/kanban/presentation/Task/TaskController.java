@@ -1,7 +1,9 @@
 package com.cereja.kanban.presentation.Task;
 
+import com.cereja.kanban.application.Task.MoveTaskUseCase;
 import com.cereja.kanban.application.Task.TaskService;
 import com.cereja.kanban.domain.Task.Task;
+import com.cereja.kanban.presentation.Task.DTO.MoveTaskRequest;
 import com.cereja.kanban.presentation.Task.DTO.CreateTaskRequest;
 import com.cereja.kanban.presentation.Task.DTO.TaskResponse;
 import jakarta.validation.Valid;
@@ -11,15 +13,20 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
-@RestController // Diz para Spring: "Eu recebo e devolvo JSON!"
-@RequestMapping("/api/tasks") // Todas as rotas começam com /api/pets
+@RestController
+@RequestMapping("/api/tasks")
 public class TaskController {
-    private final TaskService taskService;
 
-    public TaskController(TaskService taskService) {
+    private final TaskService taskService;
+    private final MoveTaskUseCase exibeTask; // <-- Adicionamos o nosso UseCase
+
+    // Atualizamos o construtor para receber os dois!
+    public TaskController(TaskService taskService, MoveTaskUseCase exibeTask) {
         this.taskService = taskService;
+        this.exibeTask = exibeTask;
     }
 
+    // ... (MANTENHA TODOS OS SEUS MÉTODOS AQUI: criar, listar, atualizar, deletar) ...
     // POST /api/task → Cria uma task
     @PostMapping
     public ResponseEntity<TaskResponse> criar(@Valid @RequestBody CreateTaskRequest request) {
@@ -127,6 +134,20 @@ public class TaskController {
         taskService.deleteTask(id); // Chama o serviço para deletar
 
         // Retorna HTTP 204 (No Content) - Indica que deletou com sucesso e não tem nada para devolver
+        return ResponseEntity.noContent().build();
+    }
+
+
+    /**
+     * Move uma tarefa para uma nova fase do Kanban.
+     * Retorna 204 No Content em caso de sucesso.
+     *
+     * @param id      ID da tarefa a ser movida.
+     * @param request Corpo da requisição com a fase de destino e o responsável.
+     */
+    @PatchMapping("/{id}/move")
+    public ResponseEntity<Void> moverTask(@PathVariable Long id, @Valid @RequestBody MoveTaskRequest request) {
+        exibeTask.execute(id, request.getPhase(), request.getMovedBy());
         return ResponseEntity.noContent().build();
     }
 }
