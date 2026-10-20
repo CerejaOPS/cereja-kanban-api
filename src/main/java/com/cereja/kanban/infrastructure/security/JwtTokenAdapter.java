@@ -45,7 +45,7 @@ public class JwtTokenAdapter implements ITokenGeneratorPort, ITokenValidatorPort
                 .subject(String.valueOf(user.getId()))
                 .claim("discordId", user.getDiscordId())
                 .claim("username", user.getUsername())
-                .claim("role", user.getRole() != null ? user.getRole().toString() : "USER")
+                .claim("role", user.getRole()) // Fallback removido, reflete apenas a regra do domínio/service
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + expirationMs))
                 .signWith(key)

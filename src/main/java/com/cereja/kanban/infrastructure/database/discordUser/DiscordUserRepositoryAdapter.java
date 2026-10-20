@@ -21,6 +21,7 @@ public class DiscordUserRepositoryAdapter implements IDiscordUserRepository {
         this.springDataRepository = springDataRepository;
     }
 
+    @Override
     public DiscordUser save(DiscordUser discordUser) {
         DiscordUserEntity entity = new DiscordUserEntity();
 
@@ -35,7 +36,7 @@ public class DiscordUserRepositoryAdapter implements IDiscordUserRepository {
         return toDomain(savedEntity);
     }
 
-    public DiscordUser toDomain(DiscordUserEntity entity){
+    private DiscordUser toDomain(DiscordUserEntity entity){
         DiscordUser domainUser = new DiscordUser();
 
         domainUser.setDiscordId(entity.getDiscordId());
@@ -47,6 +48,7 @@ public class DiscordUserRepositoryAdapter implements IDiscordUserRepository {
         return domainUser;
     }
 
+    @Override
     public List<DiscordUser> findAll(){
         return springDataRepository.findAll().stream().map(this::toDomain).toList();
     }
