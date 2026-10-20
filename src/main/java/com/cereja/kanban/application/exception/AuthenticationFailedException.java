@@ -1,4 +1,4 @@
-package com.cereja.kanban.application.auth;
+package com.cereja.kanban.application.exception;
 
 public class AuthenticationFailedException extends RuntimeException {
 

@@ -1,18 +1,25 @@
 package com.cereja.kanban.infrastructure.discord;
 
-import com.cereja.kanban.application.auth.AuthenticationFailedException;
+import com.cereja.kanban.application.exception.AuthenticationFailedException;
 import com.cereja.kanban.application.auth.DiscordUserInfo;
 import com.cereja.kanban.application.auth.IDiscordProviderPort;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
+import org.springframework.web.util.UriComponentsBuilder;
 
+/**
+ * Adaptador de saída (Driven Adapter) que implementa a porta de comunicação com o Discord.
+ * Isola a camada de aplicação dos detalhes de infraestrutura, encapsulando o cliente HTTP
+ * e o mapeamento dos contratos JSON específicos da API externa.
+ */
 @Component
 public class DiscordProviderAdapter implements IDiscordProviderPort {
 
@@ -20,7 +27,6 @@ public class DiscordProviderAdapter implements IDiscordProviderPort {
     private final String clientId;
     private final String clientSecret;
     private final String redirectUri;
-
 
     public DiscordProviderAdapter(@Value("${discord.client-id}") String clientId,
                                   @Value("${discord.client-secret}") String clientSecret,
@@ -32,6 +38,7 @@ public class DiscordProviderAdapter implements IDiscordProviderPort {
     }
 
     /** Resposta do endpoint /oauth2/token (formato do Discord, uso interno). */
+    @JsonIgnoreProperties(ignoreUnknown = true)
     private record DiscordTokenResponse(@JsonProperty("access_token") String accessToken) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -39,6 +46,7 @@ public class DiscordProviderAdapter implements IDiscordProviderPort {
 
     /**
      * Troca o código de autorização pelo access_token do Discord.
+     *
      * @param code código recebido no callback do OAuth2
      * @return access_token do usuário
      */
@@ -51,7 +59,7 @@ public class DiscordProviderAdapter implements IDiscordProviderPort {
         form.add("code", code);
         form.add("redirect_uri", this.redirectUri);
 
-        try{
+        try {
             DiscordTokenResponse response = restClient.post()
                     .uri("/v10/oauth2/token")
                     .contentType(MediaType.APPLICATION_FORM_URLENCODED)
@@ -66,37 +74,54 @@ public class DiscordProviderAdapter implements IDiscordProviderPort {
             return response.accessToken();
 
         } catch (RestClientException e) {
-            throw new AuthenticationFailedException("Falha ao autenticar com o Discord. " + e.getMessage(), e);
+            throw new AuthenticationFailedException("Falha ao autenticar com o Discord.", e);
         }
     }
 
+    /**
+     * Consulta o perfil do usuário no endpoint /users/@me e extrai os atributos mínimos necessários para a aplicação.
+     *
+     * @param accessToken credencial de acesso obtida previamente na etapa de autorização
+     * @return dados de perfil validados (id e username garantidos, avatar pode ser nulo)
+     * @throws AuthenticationFailedException quando houver falha de comunicação, resposta vazia ou dados incompletos
+     */
     @Override
     public DiscordUserInfo getUserInfo(String accessToken) {
-        try{
-            return restClient.get()
+        try {
+            DiscordUserResponse response = restClient.get()
                     .uri("/v10/users/@me")
-                    .header("Authorization", "Bearer " + accessToken)
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
                     .retrieve()
-                    .body(DiscordUserInfo.class);
+                    .body(DiscordUserResponse.class);
 
+            if (response == null) {
+                throw new AuthenticationFailedException("A API do Discord retornou uma resposta vazia.");
+            } else if (response.id() == null || response.id().isBlank() ||
+                    response.username() == null || response.username().isBlank()) {
+                throw new AuthenticationFailedException("Dados incompletos retornados pelo Discord: id ou username estão ausentes.");
+            }
 
-        }catch (RestClientException e){
-            throw new AuthenticationFailedException("Falha ao buscar dados do usuário: " + e.getMessage(), e);
+            return new DiscordUserInfo(response.id(), response.username(), response.avatar());
+
+        } catch (RestClientException e) {
+            throw new AuthenticationFailedException("Falha de comunicação ao buscar dados do usuário.", e);
         }
     }
 
-//    @Override
-//    public DiscordUserInfo getUserInfo(String accessToken) {
-//        try{
-//            return restClient.get()
-//                    .uri("/v10/users/@me")
-//                    .header("Authorization", "Bearer " + accessToken)
-//                    .retrieve()
-//                    .body(DiscordUserInfo.class);
-//
-//
-//        }catch (RestClientException e){
-//            throw new AuthenticationFailedException("Falha ao buscar dados do usuário: " + e.getMessage(), e);
-//        }
-//    }
+    /**
+     * Constrói a URL de autorização do Discord para iniciar o fluxo OAuth2.
+     * Não realiza nenhuma requisição HTTP, apenas formata a string com os parâmetros corretos.
+     *
+     * @return URL completa para redirecionar o usuário para a tela de permissões do Discord.
+     */
+    @Override
+    public String getAuthorizationUrl() {
+        return UriComponentsBuilder.fromUriString("https://discord.com/oauth2/authorize")
+                .queryParam("client_id", this.clientId)
+                .queryParam("response_type", "code")
+                .queryParam("redirect_uri", this.redirectUri)
+                .queryParam("scope", "identify")
+                .encode() // Obrigatório para codificar caracteres especiais no redirect_uri (como : e /)
+                .toUriString();
+    }
 }
