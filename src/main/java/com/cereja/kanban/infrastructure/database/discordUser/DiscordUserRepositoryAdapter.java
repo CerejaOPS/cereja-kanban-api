@@ -2,11 +2,7 @@ package com.cereja.kanban.infrastructure.database.discordUser;
 
 import com.cereja.kanban.domain.DiscordUser.DiscordUser;
 import com.cereja.kanban.domain.DiscordUser.IDiscordUserRepository;
-import com.cereja.kanban.domain.Task.Task;
-import com.cereja.kanban.infrastructure.database.task.SpringDataTaskRepository;
-import com.cereja.kanban.infrastructure.database.task.TaskEntity;
 import org.springframework.stereotype.Component;
-
 import java.util.List;
 import java.util.Optional;
 
