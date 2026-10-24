@@ -3,7 +3,6 @@ package com.cereja.kanban.infrastructure.database.task;
 import com.cereja.kanban.domain.Task.ITaskRepository; // Seu contrato
 import com.cereja.kanban.domain.Task.Task; // Sua entidade pura
 import org.springframework.stereotype.Component;
-
 import java.util.List;
 import java.util.Optional;
 
