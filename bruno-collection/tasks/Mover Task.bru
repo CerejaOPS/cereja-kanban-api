@@ -1,0 +1,22 @@
+meta {
+  name: Mover Task
+  type: http
+  seq: 5
+}
+
+patch {
+  url: {{baseUrl}}/api/tasks/1/move
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "phase": "IN_PROGRESS",
+    "movedBy": "gustavo"
+  }
+}

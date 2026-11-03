@@ -1,0 +1,24 @@
+meta {
+  name: Criar Task
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/tasks
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "title": "Criar tela de login com Discord",
+    "description": "Implementar botão de login e redirect OAuth2",
+    "priority": "ALTA",
+    "boardId": 1
+  }
+}

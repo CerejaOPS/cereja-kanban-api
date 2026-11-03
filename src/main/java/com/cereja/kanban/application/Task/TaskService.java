@@ -1,5 +1,6 @@
 package com.cereja.kanban.application.Task;
 
+import com.cereja.kanban.application.events.IBoardEventPublisher;
 import com.cereja.kanban.application.exception.ResourceNotFoundException;
 import com.cereja.kanban.domain.Task.ITaskRepository;
 import com.cereja.kanban.domain.Task.Task;
@@ -13,10 +14,12 @@ public class TaskService {
 
     // O Service só conversa com a interface pura do domínio!
     private final ITaskRepository taskRepository;
+    private final IBoardEventPublisher eventPublisher;
 
     // Construtor (o Spring injeta aquele Adapter que você criou aqui dentro sozinho!)
-    public TaskService(ITaskRepository taskRepository) {
+    public TaskService(ITaskRepository taskRepository, IBoardEventPublisher eventPublisher) {
         this.taskRepository = taskRepository;
+        this.eventPublisher = eventPublisher;
     }
 
     // 1. Criar Task
@@ -24,8 +27,12 @@ public class TaskService {
         // Regra de Negócio: Toda task nova deve nascer obrigatoriamente na fase BACKLOG
         novaTask.setPhase(TaskPhase.BACKLOG);
 
+        Task taskSalva = taskRepository.save(novaTask);
+
+        eventPublisher.publish(taskSalva.getBoardId(), "TASK_CREATED", taskSalva);
+
         // Mande salvar e retorne o resultado
-        return taskRepository.save(novaTask);
+        return taskSalva;
     }
 
     // TODO: Agora é com você! Implemente esses dois métodos:
@@ -51,23 +58,24 @@ public class TaskService {
         // Obs: NÃO atualizamos a Phase aqui (mover de fase é a FEAT-02, com regras próprias)
 
         // 3. Salva de volta no banco e retorna
-        return taskRepository.save(taskExistente);
+
+        Task taskSalva = taskRepository.save(taskExistente);
+        eventPublisher.publish(taskSalva.getBoardId(), "TASK_UPDATED", taskSalva);
+
+        return taskSalva;
     }
 
-    public void deleteTask(Long id){
+    public void deleteTask(Long id) {
         findById(id);
 
         taskRepository.deleteById(id);
-        }
+    }
 
-    public List<Task> findByBoardId(Long boardId){
+    public List<Task> findByBoardId(Long boardId) {
 
         return taskRepository.findByBoardId(boardId);
 
     }
-
-
-
 
 
 }
