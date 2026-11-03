@@ -1,0 +1,24 @@
+meta {
+  name: Atualizar Task
+  type: http
+  seq: 4
+}
+
+put {
+  url: {{baseUrl}}/api/tasks/1
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "title": "Criar tela de login com Discord (atualizada)",
+    "description": "Implementar botão de login, redirect OAuth2 e tratamento de erro",
+    "priority": "URGENTE",
+    "boardId": 1
+  }
+}
