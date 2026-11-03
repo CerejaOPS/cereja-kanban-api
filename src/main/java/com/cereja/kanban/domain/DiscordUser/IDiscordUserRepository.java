@@ -8,4 +8,5 @@ public interface IDiscordUserRepository {
     List<DiscordUser> findAll();
     Optional<DiscordUser> findById(Long id);
     void deleteById(Long id);
+    Optional<DiscordUser> findByDiscordId(String discordId);
 }

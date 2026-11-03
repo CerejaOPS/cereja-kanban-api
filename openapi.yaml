@@ -7,6 +7,49 @@ servers:
   - url: http://localhost:3001
     description: Servidor de Desenvolvimento
 paths:
+  /api/auth/discord:
+    get:
+      summary: Inicia o fluxo de autenticação com o Discord
+      description: Redireciona o usuário para a página de autorização OAuth2 do Discord.
+      tags:
+        - Auth
+      responses:
+        '302':
+          description: Redirecionamento HTTP para a URL do Discord.
+
+  /api/auth/discord/callback:
+    get:
+      summary: Callback de autorização do Discord
+      description: Endpoint chamado pelo Discord após o usuário aprovar ou negar o acesso. Recebe o código e retorna o token JWT da aplicação.
+      tags:
+        - Auth
+      parameters:
+        - in: query
+          name: code
+          schema:
+            type: string
+          required: false
+          description: Código temporário gerado pelo Discord (presente em caso de sucesso).
+        - in: query
+          name: error
+          schema:
+            type: string
+          required: false
+          description: Erro retornado pelo Discord (ex. "access_denied" caso o usuário cancele).
+      responses:
+        '200':
+          description: Autenticação bem-sucedida. Retorna o token JWT.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                    description: Token JWT para ser enviado no header Authorization (Bearer {token}).
+        '401':
+          description: Falha de autenticação (acesso negado, código inválido ou ausente).
+
   /api/tasks:
     get:
       summary: Lista todas as tarefas (filtradas por phase opcional)
@@ -68,3 +111,10 @@ paths:
       responses:
         '200':
           description: Lista de etiquetas retornada
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
