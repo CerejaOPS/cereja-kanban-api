@@ -77,5 +77,14 @@ public class TaskService {
 
     }
 
+    // Atribui ou desatribui um membro como responsavel pela tarefa
+    public Task assignTask(Long taskId, String assigneeDiscordId){
 
+        Task task = findById(taskId); // 1. Busca task
+        task.setAssigneeDiscordId(assigneeDiscordId); // 2. Atualiza responsavel
+        Task taskSalva = taskRepository.save(task); // 3. Salva no banco 
+        eventPublisher.publish(taskSalva.getBoardId(), "TASK_UPDATED", taskSalva); // 4. Publica evento SSE
+        return taskSalva;
+
+    }
 }

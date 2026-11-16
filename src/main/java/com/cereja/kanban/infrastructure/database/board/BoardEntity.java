@@ -1,6 +1,7 @@
 package com.cereja.kanban.infrastructure.database.board;
 
 import com.cereja.kanban.infrastructure.database.task.TaskEntity;
+import com.cereja.kanban.infrastructure.database.discordUser.DiscordUserEntity;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
@@ -41,7 +42,11 @@ public class BoardEntity {
     @JoinColumn(name = "board_id") // informa qual coluna na tabela tasks guarda a chave estrangeira
     private List<TaskEntity> tasks;
 
-
-
-
+    @ManyToMany // Relação de N para N (Um quadro pode ter varios membros, um usuário pode ter varios quadros)
+    @JoinTable(
+        name = "board_members", // Nome da tabela intermediaria
+        joinColumns = @JoinColumn(name = "board_id"), // Chave estrangeira que aponta para o ID do Board
+        inverseJoinColumns = @JoinColumn(name = "user_id") // Chave estrangeira que aponta para o ID do usuário
+    )
+    private List<DiscordUserEntity> members;
 }

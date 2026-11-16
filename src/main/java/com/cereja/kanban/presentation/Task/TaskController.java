@@ -6,6 +6,7 @@ import com.cereja.kanban.domain.Task.Task;
 import com.cereja.kanban.presentation.Task.DTO.MoveTaskRequest;
 import com.cereja.kanban.presentation.Task.DTO.CreateTaskRequest;
 import com.cereja.kanban.presentation.Task.DTO.TaskResponse;
+import com.cereja.kanban.presentation.Task.DTO.AssignTaskRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -149,5 +150,29 @@ public class TaskController {
     public ResponseEntity<Void> moverTask(@PathVariable Long id, @Valid @RequestBody MoveTaskRequest request) {
         exibeTask.execute(id, request.getPhase(), request.getMovedBy());
         return ResponseEntity.noContent().build();
+    }
+
+    // Atribui um responsavel a tarefa ou remove atribuição
+    @PatchMapping("/{id}/assign")
+    public ResponseEntity<TaskResponse> atribuirResponsavel(
+        @PathVariable Long id, 
+        @RequestBody AssignTaskRequest request){
+
+            Task taskAtualizada = taskService.assignTask(id, request.getAssigneeDiscordId());
+
+            
+            TaskResponse response = new TaskResponse(
+                taskAtualizada.getId(),
+                taskAtualizada.getTitle(),
+                taskAtualizada.getDescription(),
+                taskAtualizada.getPhase(),
+                taskAtualizada.getPriority(),
+                taskAtualizada.getBoardId(),
+                taskAtualizada.getAssigneeDiscordId(),
+                taskAtualizada.getCreatedAt(),
+                taskAtualizada.getUpdatedAt()
+            );
+
+            return ResponseEntity.ok(response);
     }
 }

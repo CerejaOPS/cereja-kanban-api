@@ -3,6 +3,7 @@ package com.cereja.kanban.application.Board;
 import com.cereja.kanban.application.exception.ResourceNotFoundException;
 import com.cereja.kanban.domain.Board.Board;
 import com.cereja.kanban.domain.Board.IBoardRepository;
+import com.cereja.kanban.domain.DiscordUser.DiscordUser;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -56,6 +57,13 @@ public class BoardService {
 
     }
 
-
+    // Busca todos os membros de um quadro especifico    
+    public List<DiscordUser> findMembers(Long boardId) {
+        // Validação defensiva -> se o board com esse ID não existir no banco, lança erro antes de buscar membros
+        findById(boardId);
+        
+        // Retorna a lista de membros através do repositório
+        return boardRepository.findMembersByBoardId(boardId);
+    }
 
 }
