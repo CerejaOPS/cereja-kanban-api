@@ -3,6 +3,8 @@ package com.cereja.kanban.infrastructure.database.board;
 import com.cereja.kanban.domain.Board.Board;
 import com.cereja.kanban.domain.Board.IBoardRepository;
 import org.springframework.stereotype.Component;
+import com.cereja.kanban.domain.DiscordUser.DiscordUser;
+import com.cereja.kanban.infrastructure.database.discordUser.DiscordUserEntity;
 
 import java.util.List;
 import java.util.Optional;
@@ -65,5 +67,25 @@ public class BoardRepositoryAdapter implements IBoardRepository {
     @Override
     public void deleteById(Long id){
         springDataRepository.deleteById(id);
+    }
+
+    // Implementa o contrato do domínio: consulta o Spring Data e converte o resultado do banco para o domínio
+    @Override
+    public List<DiscordUser> findMembersByBoardId(Long boardId) {
+        List<DiscordUserEntity> entities = springDataRepository.findMembersByBoardId(boardId);
+        return entities.stream()
+                .map(this::converterUsuarioParaDominio)
+                .toList();
+    }
+
+    // Método auxiliar: traduz a entidade do banco para o modelo de domínio puro
+    private DiscordUser converterUsuarioParaDominio(DiscordUserEntity entity) {
+        DiscordUser user = new DiscordUser();
+        user.setId(entity.getId());
+        user.setDiscordId(entity.getDiscordId());
+        user.setUsername(entity.getUsername());
+        user.setAvatar(entity.getAvatar());
+        user.setRole(entity.getRole());
+        return user;
     }
 }

@@ -4,7 +4,9 @@ import com.cereja.kanban.application.Board.BoardService;
 import com.cereja.kanban.application.Task.TaskService;
 import com.cereja.kanban.domain.Board.Board;
 import com.cereja.kanban.domain.Task.Task;
+import com.cereja.kanban.domain.DiscordUser.DiscordUser;
 import com.cereja.kanban.presentation.Board.DTO.BoardResponse;
+import com.cereja.kanban.presentation.Board.DTO.MemberResponse;
 import com.cereja.kanban.presentation.Board.DTO.CreateBoardRequest;
 import com.cereja.kanban.presentation.Task.DTO.TaskResponse;
 import jakarta.validation.Valid;
@@ -146,6 +148,24 @@ public class BoardController {
 
     }
 
+    // Lista todos os membros disponiveis e associados a um quadro especifico
+    @GetMapping("/{id}/members")
+    public ResponseEntity<List<MemberResponse>> listarMembrosDoBoard(@PathVariable Long id){
 
+        // Busca membros do dominio
+        List<DiscordUser> membros = boardService.findMembers(id);
 
+        // Converte entidade de dominio para DTO 
+        List<MemberResponse> responses = membros.stream()
+            .map(membro -> new MemberResponse(
+                membro.getId(),
+                membro.getDiscordId(),
+                membro.getUsername(),
+                membro.getAvatar(),
+                membro.getRole()
+            ))
+            .toList();
+
+        return ResponseEntity.ok(responses);
+    }
 }
